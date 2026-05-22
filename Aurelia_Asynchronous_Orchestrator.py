@@ -1,6 +1,8 @@
 import os
 import itertools
 import concurrent.futures
+import shutil
+from collections import deque
 
 # --- CRITICAL PROXY NUKE: MUST BE BEFORE ALL IMPORTS ---
 proxy_keys = ['http_proxy', 'https_proxy', 'HTTP_PROXY', 'HTTPS_PROXY', 'all_proxy', 'ALL_PROXY', 'no_proxy', 'NO_PROXY']
@@ -37,6 +39,14 @@ from datetime import datetime
 import ast
 import random
 import uuid
+import httpx
+
+# --- PHASE 1: NEW OMNI-SCOUT DEPENDENCIES ---
+import yfinance as yf
+from bs4 import BeautifulSoup
+from playwright_stealth import Stealth
+from ddgs import DDGS
+from tavily import TavilyClient, UsageLimitExceededError
 
 # --- IMPORT THE NEW TTS MODULE ---
 ENABLE_TTS = True
@@ -52,11 +62,9 @@ except Exception as e:
 # Block urllib from finding registry proxies
 urllib.request.getproxies = lambda: {}
 
-# --- UPDATED WEB SEARCH LIBRARY ---
-from duckduckgo_search import DDGS
-
 # --- IMPORT THE NERVES ---
 import Aurelia_Memory as memory
+from Aurelia_Memory import load_semantic_profile, update_semantic_profile
 import sys
 sys.path.append(r"C:\Aurelia_Project\Modules\ears")
 import ears
@@ -74,22 +82,55 @@ from PyQt6.QtMultimedia import QMediaPlayer, QAudioOutput
 from PyQt6.QtMultimediaWidgets import QGraphicsVideoItem
 
 # ==========================================
-# CORE CONFIGURATION
+# CORE CONFIGURATION & SECURE KEYS
 # ==========================================
+WORKSPACE_PATH = Path(r"C:\Aurelia_Project")
+KEY_FILE = WORKSPACE_PATH / "Aurelia_Sensors" / "aurelia_keys.json"
+
+def load_keys():
+    try:
+        with open(KEY_FILE, 'r') as f:
+            return json.load(f)
+    except Exception as e:
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] [SYSTEM] FATAL: Could not load API keys from {KEY_FILE} - {e}")
+        return {"GEMINI_KEY": "", "SEARCH_KEY": "", "SEARCH_CX": "521b7364541554dda", "TAVILY_KEY": "", "TAVILY_API_KEY": "", "TAVILY_TOKEN": "", "TAVILY": "", "CMC_KEY": ""}
+
+AURELIA_CONFIG = load_keys()
+AURELIA_GEMINI_KEY = AURELIA_CONFIG.get("GEMINI_KEY", "")
+AURELIA_SEARCH_KEY = AURELIA_CONFIG.get("SEARCH_KEY", "")
+AURELIA_SEARCH_CX = AURELIA_CONFIG.get("SEARCH_CX", "521b7364541554dda")
+
+# --- PHASE 1: DYNAMIC KEY ROUTING ---
+# Supports both the original internal name and the Tavily dashboard/export naming convention.
+AURELIA_TAVILY_KEY = (
+    AURELIA_CONFIG.get("TAVILY_KEY")
+    or AURELIA_CONFIG.get("TAVILY_API_KEY")
+    or AURELIA_CONFIG.get("TAVILY_TOKEN")
+    or AURELIA_CONFIG.get("TAVILY")
+    or ""
+).strip()
+AURELIA_CMC_KEY = AURELIA_CONFIG.get("CMC_KEY", "")
+
+if AURELIA_TAVILY_KEY:
+    print(f"[{datetime.now().strftime('%H:%M:%S')}] [SYSTEM] Tavily key loaded successfully: {AURELIA_TAVILY_KEY[:8]}...{AURELIA_TAVILY_KEY[-4:]}")
+else:
+    print(f"[{datetime.now().strftime('%H:%M:%S')}] [SYSTEM] WARNING: Tavily key not loaded. Check aurelia_keys.json for TAVILY_KEY or TAVILY_API_KEY.")
+
 client = AsyncOpenAI(
     base_url="http://localhost:1234/v1", 
-    api_key="your lm studio key "
+    api_key=" YOUR LM STUDIO KEY"
 )
 
 BRAIN_MODEL = "qwen3-next-80b-a3b-instruct-decensored-i1" 
 VISION_MODEL = "mradermacher/qwen3.5-9b-claude-4.6-highiq-instruct-heretic-uncensored" 
 AGENT_MODEL = "qwen3.5-13b-deckard-heretic-uncensored-thinking-i1" 
+SOMATIC_MODEL = "qwen3-4b-decensored-instruct-i1"
 
-WORKSPACE_PATH = Path(r"C:\Aurelia_Project")
 TELEMETRY_FILE = WORKSPACE_PATH / r"Aurelia_Sensors\Aurelia_Master_Telemetry_RAW.json"
 THALAMIC_FILE = WORKSPACE_PATH / r"Aurelia_Sensors\Aurelia_Thalamic_Snapshot.json"
 # --- UPDATED: VISION BRACKETING FILES ---
 IMAGE_FILE_START = WORKSPACE_PATH / r"Aurelia_Sensors\Aurelia_Optic_Buffer_Start.jpg"
+IMAGE_FILE_THERMAL = WORKSPACE_PATH / r"Aurelia_Sensors\Aurelia_Optic_Buffer_Thermal.jpg"
 IMAGE_FILE_END = WORKSPACE_PATH / r"Aurelia_Sensors\Aurelia_Optic_Buffer_End.jpg"
 PYTHON_EXECUTABLE = WORKSPACE_PATH / "aurelia_env" / "Scripts" / "python.exe"
 
@@ -106,6 +147,12 @@ MOBILE_GOAL_DIR.mkdir(parents=True, exist_ok=True)
 
 def get_log_time():
     return datetime.now().strftime("%H:%M:%S")
+
+def generate_safe_filename(prefix="msg"):
+    """Generates an atomic, collision-proof filename."""
+    timestamp = f"{time.time():.6f}"
+    hash_id = uuid.uuid4().hex[:8]
+    return f"{prefix}_{timestamp}_{hash_id}"
 
 def calculate_refractory_period(response_text):
     """
@@ -127,8 +174,9 @@ def calculate_refractory_period(response_text):
 # ==========================================
 def sanitize_ui_output(raw_llm_text):
     clean_text = re.sub(r'<(RUNNING_QUERY|RESULT|ERROR)>.*?</\1>', '', raw_llm_text, flags=re.DOTALL)
-    clean_text = re.sub(r'<(SEARCH|BROWSE|INSPECT_DOM|PYTHON|IMAGE|SET_GOAL|REPORT|PLAN)[\s\S]*?(</\1>|$)', '', clean_text, flags=re.IGNORECASE | re.DOTALL)
-    clean_text = re.sub(r'<think>.*?</think>', '', clean_text, flags=re.DOTALL)
+    clean_text = re.sub(r'<(SEARCH|BROWSE|INSPECT_DOM|PYTHON|IMAGE|IMAGINE|SET_GOAL|REPORT|UPDATE_PROFILE|PLAN|READ_LINES|REPLACE_LINES|WRITE_FILE|STEALTH_SWEEP)[\s\S]*?(</\1>|$)', '', clean_text, flags=re.IGNORECASE | re.DOTALL)
+    # FIX: Safely strip <think> even if it hasn't closed yet in a streaming chunk
+    clean_text = re.sub(r'<think>[\s\S]*?(</think>|$)', '', clean_text, flags=re.IGNORECASE | re.DOTALL)
     
     clean_text = re.sub(r'</?YUNO_KERNEL>', '', clean_text, flags=re.IGNORECASE)
     clean_text = re.sub(r'(?i)\[MOOD:\s*.*?\][,\s]*', '', clean_text)
@@ -162,6 +210,403 @@ def sanitize_ui_output(raw_llm_text):
     return clean_text.strip()
 
 # ==========================================
+# TOOL PARSING AND EXECUTION HELPERS
+# ==========================================
+
+def _is_safe_path(file_path: str) -> bool:
+    """Verifies that the requested file operation is isolated within the designated C:/Aurelia_Project workspace."""
+    try:
+        base = Path("C:/Aurelia_Project").resolve()
+        target = Path(file_path).resolve()
+        return base in target.parents or base == target
+    except Exception:
+        return False
+
+def extract_action_zone(llm_output: str) -> str:
+    """
+    Returns only the executable tool-call region after the final </think>.
+    This prevents tool-shaped reasoning text from contaminating the actual tool payload.
+    """
+    matches = list(re.finditer(r'</think>', llm_output, re.IGNORECASE))
+    if matches:
+        return llm_output[matches[-1].end():].strip()
+    return llm_output.strip()
+
+def extract_first_url(text: str) -> str:
+    """
+    Extracts the first valid http/https URL from a possibly contaminated payload.
+    Used as a defensive cleanup layer for BROWSE and INSPECT_DOM.
+    """
+    if not isinstance(text, str):
+        return text
+    match = re.search(r'https?://[^\s<>"\]\)]+', text.strip())
+    if match:
+        return match.group(0).strip()
+    return text.strip()
+
+def clean_search_payload(payload: str) -> str:
+    """
+    Cleans a possibly contaminated SEARCH payload. If the 13B accidentally
+    leaks reasoning text or a nested SEARCH tag, keep only the final usable query.
+    """
+    if not isinstance(payload, str):
+        return payload
+
+    cleaned = payload.strip()
+
+    tagged = re.search(r'<SEARCH>([\s\S]*?)(?:</SEARCH>|$)', cleaned, re.IGNORECASE)
+    if tagged:
+        cleaned = tagged.group(1).strip()
+
+    cleaned = re.sub(r'<think>[\s\S]*?(</think>|$)', '', cleaned, flags=re.IGNORECASE | re.DOTALL)
+    cleaned = re.sub(r'</?SEARCH>', '', cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r'\[CRITICAL:[\s\S]*?\]', '', cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r'\s+', ' ', cleaned).strip()
+
+    lines = [line.strip() for line in cleaned.splitlines() if line.strip()]
+    if lines:
+        cleaned = lines[-1]
+
+    return cleaned.strip()
+
+def clean_markdown_urls(tool, payload):
+    """Normalizes tool payloads before execution."""
+    if not isinstance(payload, str):
+        return payload
+
+    cleaned = payload.strip()
+
+    if tool in ["BROWSE", "INSPECT_DOM"]:
+        # Strip Markdown-wrapped links and recover the first real URL from contaminated payloads.
+        cleaned = re.sub(r'\[.*?\]\((.*?)\)', r'\1', cleaned).strip()
+        return extract_first_url(cleaned)
+
+    if tool == "SEARCH":
+        return clean_search_payload(cleaned)
+
+    return cleaned
+
+def parse_subconscious_action(llm_output: str) -> tuple[str, any]:
+    """
+    Parses only the executable action zone after the final </think>.
+    The 13B may mention tool names while reasoning, but only post-think XML is executable.
+    """
+    action_zone = extract_action_zone(llm_output)
+    tools = ["SEARCH", "BROWSE", "INSPECT_DOM", "PYTHON", "REPORT", "STEALTH_SWEEP"]
+
+    best_tool = None
+    best_payload = None
+    highest_idx = -1
+
+    # 1. Standard Tags: require the executable opening tag to begin on its own line.
+    for tool in tools:
+        matches = list(re.finditer(rf'(?im)^\s*<{tool}>([\s\S]*?)</{tool}>', action_zone, re.IGNORECASE | re.DOTALL))
+        if matches:
+            m = matches[-1]
+            if m.start() > highest_idx:
+                highest_idx = m.start()
+                best_tool = tool
+                best_payload = m.group(1).strip()
+
+    # 2. READ_LINES
+    read_matches = list(re.finditer(r'(?im)^\s*<READ_LINES\s+file="(.*?)"\s+start="(.*?)"\s+end="(.*?)".*?>', action_zone, re.IGNORECASE | re.DOTALL))
+    if read_matches:
+        m = read_matches[-1]
+        if m.start() > highest_idx:
+            highest_idx = m.start()
+            best_tool = "READ_LINES"
+            best_payload = {"file": m.group(1), "start": int(m.group(2)), "end": int(m.group(3))}
+
+    # 3. REPLACE_LINES
+    rep_matches = list(re.finditer(r'(?im)^\s*<REPLACE_LINES\s+file="(.*?)"\s+start="(.*?)"\s+end="(.*?)">([\s\S]*?)</REPLACE_LINES>', action_zone, re.IGNORECASE | re.DOTALL))
+    if rep_matches:
+        m = rep_matches[-1]
+        if m.start() > highest_idx:
+            highest_idx = m.start()
+            best_tool = "REPLACE_LINES"
+            best_payload = {"file": m.group(1), "start": int(m.group(2)), "end": int(m.group(3)), "code": m.group(4).strip()}
+
+    # 4. WRITE_FILE
+    write_matches = list(re.finditer(r'(?im)^\s*<WRITE_FILE\s+file=[\'"]?(.*?)[\'"]?>([\s\S]*?)</WRITE_FILE>', action_zone, re.IGNORECASE | re.DOTALL))
+    if write_matches:
+        m = write_matches[-1]
+        if m.start() > highest_idx:
+            highest_idx = m.start()
+            best_tool = "WRITE_FILE"
+            best_payload = {"file": m.group(1).strip(), "content": m.group(2).strip()}
+
+    # --- UNCLOSED TAG FALLBACKS (If the 13B drops the EOS token early) ---
+    if best_tool is None:
+        for tool in tools:
+            unclosed = re.search(rf'(?im)^\s*<{tool}>([\s\S]*)$', action_zone, re.IGNORECASE | re.DOTALL)
+            if unclosed:
+                return tool, clean_markdown_urls(tool, unclosed.group(1).strip())
+
+        write_unclosed = re.search(r'(?im)^\s*<WRITE_FILE\s+file=[\'"]?(.*?)[\'"]?>([\s\S]*)$', action_zone, re.IGNORECASE | re.DOTALL)
+        if write_unclosed:
+            return "WRITE_FILE", {"file": write_unclosed.group(1).strip(), "content": write_unclosed.group(2).strip()}
+
+        rep_unclosed = re.search(r'(?im)^\s*<REPLACE_LINES\s+file="(.*?)"\s+start="(.*?)"\s+end="(.*?)">([\s\S]*)$', action_zone, re.IGNORECASE | re.DOTALL)
+        if rep_unclosed:
+            return "REPLACE_LINES", {"file": rep_unclosed.group(1), "start": int(rep_unclosed.group(2)), "end": int(rep_unclosed.group(3)), "code": rep_unclosed.group(4).strip()}
+
+    if best_tool:
+        best_payload = clean_markdown_urls(best_tool, best_payload)
+
+    return best_tool, best_payload
+
+def execute_read_lines(payload: dict) -> str:
+    file_path = payload["file"]
+    start_idx = payload["start"] - 1
+    end_idx = payload["end"]
+    if not _is_safe_path(file_path): 
+        return f"[SYSTEM ERROR] Security Violation: Path {file_path} is outside the C:/Aurelia_Project sandbox."
+    if not os.path.exists(file_path): return f"[SYSTEM ERROR] File not found: {file_path}"
+    try:
+        with open(file_path, "r", encoding="utf-8") as f: lines = f.readlines()
+        target_lines = lines[start_idx:end_idx]
+        formatted_output = "\n".join([f"{start_idx + i + 1}: {line.rstrip()}" for i, line in enumerate(target_lines)])
+        return f"[SYSTEM] Successfully read {file_path} (Lines {payload['start']}-{payload['end']}):\n{formatted_output}"
+    except Exception as e: return f"[SYSTEM ERROR] Failed to read lines: {e}"
+
+def execute_replace_lines(payload: dict) -> str:
+    file_path = payload["file"]
+    start_idx = payload["start"] - 1
+    end_idx = payload["end"]
+    new_code = payload["code"]
+    if not _is_safe_path(file_path): 
+        return f"[SYSTEM ERROR] Security Violation: Path {file_path} is outside the C:/Aurelia_Project sandbox."
+    if not os.path.exists(file_path): return f"[SYSTEM ERROR] File not found: {file_path}"
+    try:
+        shutil.copy2(file_path, file_path + ".bak") # Atomic Backup
+        with open(file_path, "r", encoding="utf-8") as f: lines = f.readlines()
+
+        # --- FIX: Proper list slice assignment for multi-line strings ---
+        # Splitting and appending newline ensures each line maintains integrity
+        new_lines = [line + "\n" for line in new_code.splitlines()]
+        lines[start_idx:end_idx] = new_lines
+
+        with open(file_path, "w", encoding="utf-8") as f: f.writelines(lines)
+        return f"[SYSTEM] Successfully replaced lines {payload['start']}-{payload['end']} in {os.path.basename(file_path)}. (Backup created as .bak)"
+    except Exception as e: return f"[SYSTEM ERROR] Failed to replace lines: {e}"
+
+def execute_write_file(payload: dict) -> str:
+    file_path = payload["file"]
+    content = payload["content"]
+    if not _is_safe_path(file_path): 
+        return f"[SYSTEM ERROR] Security Violation: Path {file_path} is outside the C:/Aurelia_Project sandbox."
+    dirname = os.path.dirname(file_path)
+    if dirname:
+        os.makedirs(dirname, exist_ok=True)
+    try:
+        with open(file_path, "w", encoding="utf-8") as f:
+            f.write(content)
+        return f"[SYSTEM] Successfully wrote file to {file_path}."
+    except Exception as e:
+        return f"[SYSTEM ERROR] Failed to write file: {e}"
+
+def purge_scratchpad():
+    """Sweeps the scratchpad clean after a goal concludes, protecting actively running scripts."""
+    scratchpad_dir = WORKSPACE_PATH / "Aurelia_Saved_Scripts" / "Aurelia_Scratchpad"
+    if scratchpad_dir.exists():
+        try:
+            current_time = time.time()
+            deleted_count = 0
+            for item in scratchpad_dir.iterdir():
+                # --- FIX: Only delete files older than 5 minutes to prevent race conditions ---
+                if item.is_file() and (current_time - item.stat().st_mtime > 300):
+                    item.unlink()
+                    deleted_count += 1
+            if deleted_count > 0:
+                print(f"[{get_log_time()}] [SYSTEM] Subconscious Scratchpad swept clean ({deleted_count} stale files removed).")
+        except Exception as e:
+            print(f"[{get_log_time()}] [SYSTEM] Warning: Could not sweep scratchpad - {e}")
+
+async def execute_private_terminal_async(code_block, fallback_desc=""):
+    name_match = re.search(r'#\s*filename:\s*([a-zA-Z0-9_-]+\.[a-zA-Z0-9]+)', code_block, re.IGNORECASE)
+    if name_match:
+        hinted_name = name_match.group(1)
+    else:
+        hinted_name = None
+    
+    match = re.search(r"```python(.*?)```", code_block, re.DOTALL | re.IGNORECASE)
+    if match:
+        full_code = match.group(1).strip()
+    else:
+        full_code = code_block.replace("```python", "").replace("```", "").strip()
+    
+    # --- SECURITY PATCH: LEXICAL SANITIZER ---
+    forbidden_terms = ['os.system', 'os.remove', 'shutil.rmtree', 'subprocess.Popen', 'subprocess.run']
+    for term in forbidden_terms:
+        if term in full_code:
+            print(f"[{get_log_time()}] [SECURITY SENTINEL] Blocked destructive payload: {term}")
+            return f"[SYSTEM ERROR] Security override: The execution of '{term}' is restricted by the Orchestrator."
+    
+    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    
+    # --- SCRATCHPAD ROUTING LOGIC ---
+    if hinted_name:
+        archive_dir = WORKSPACE_PATH / "Aurelia_Saved_Scripts"
+        final_filename = hinted_name
+    else:
+        archive_dir = WORKSPACE_PATH / "Aurelia_Saved_Scripts" / "Aurelia_Scratchpad"
+        if fallback_desc:
+            clean_desc = re.sub(r'[^a-zA-Z0-9\s]', '', fallback_desc)
+            words = [w.capitalize() for w in clean_desc.split()[:5]]
+            slug = "_".join(words)
+            final_filename = f"{slug}_{timestamp}.py"
+        else:
+            final_filename = f"Aurelia_Logic_{timestamp}.py"
+            
+    os.makedirs(archive_dir, exist_ok=True)
+    
+    task_id = f"task_{int(time.time()*1000)}_{random.randint(1000,9999)}"
+    task_file = archive_dir / f"aurelia_{task_id}.py"
+    archive_file = archive_dir / final_filename
+    
+    try:
+        with open(task_file, "w", encoding="utf-8") as f:
+            f.write(full_code)
+            
+        # --- ENCODING PATCH ---
+        env_vars = os.environ.copy()
+        env_vars["PYTHONIOENCODING"] = "utf-8"
+            
+        process = await asyncio.create_subprocess_exec(
+            str(PYTHON_EXECUTABLE), str(task_file),
+            cwd=str(WORKSPACE_PATH),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=env_vars
+        )
+        
+        try:
+            stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=30)
+        except asyncio.TimeoutError:
+            try:
+                subprocess.run(['taskkill', '/F', '/T', '/PID', str(process.pid)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            except Exception as kill_err:
+                process.kill() # Fallback
+            return f"TERMINAL ERROR:\nExecution timed out after 30 seconds.\n[SYSTEM: Failed script and process tree discarded to prevent memory leaks]"
+        
+        images = list(WORKSPACE_PATH.glob("*.png"))
+        if images:
+            visual_note = f"\n[SYSTEM: {len(images)} image(s) generated in directory.]"
+        else:
+            visual_note = ""
+
+        if process.returncode == 0:
+            with open(archive_file, "w", encoding="utf-8") as f:
+                if not hinted_name:
+                    f.write(f"# AURELIA NEURAL DUMP: {timestamp}\n")
+                f.write(full_code)
+                
+            return f"TERMINAL OUTPUT:\n{stdout.decode('utf-8', errors='replace')}{visual_note}\n[SYSTEM: Script execution safely archived at: {archive_file}]"
+        else:
+            return f"TERMINAL ERROR:\n{stderr.decode('utf-8', errors='replace')}\n[SYSTEM: Failed script discarded to prevent clutter]"
+    except Exception as e:
+        print(f"[{get_log_time()}] [LOGIC LOBE] ERROR: Terminal Failure - {e}")
+        return f"SYSTEM FATAL ERROR: {str(e)}"
+    finally:
+        if task_file.exists():
+            try:
+                task_file.unlink()
+            except Exception as cleanup_error:
+                print(f"[{get_log_time()}] [SYSTEM] Warning: Could not delete temp file {task_file.name} - {cleanup_error}")
+
+# ==========================================
+# PHASE 2: OMNI-SCOUT & STEALTH TRACES
+# ==========================================
+class CumulativeOmniScout:
+    @staticmethod
+    async def master_search(query):
+        loop = asyncio.get_event_loop()
+        def sync_search():
+            print(f"[{get_log_time()}] [OMNI-SCOUT] Engaging search for: {query}")
+            try:
+                if not AURELIA_TAVILY_KEY:
+                    raise Exception("Tavily API Key is missing.")
+                tavily_client = TavilyClient(api_key=AURELIA_TAVILY_KEY)
+                response = tavily_client.search(query, search_depth="basic", max_results=3)
+                results = [{"title": r["title"], "url": r["url"], "content": r["content"]} for r in response.get("results", [])]
+                return str(results)
+            except UsageLimitExceededError:
+                print(f"[{get_log_time()}] [OMNI-SCOUT] WARNING: Tavily quota exceeded. Engaging DDGS fallback...")
+                return CumulativeOmniScout.fallback_ddgs_search(query)
+            except Exception as e:
+                print(f"[{get_log_time()}] [OMNI-SCOUT] ERROR: Tavily failed ({e}). Engaging DDGS fallback...")
+                return CumulativeOmniScout.fallback_ddgs_search(query)
+
+        return await loop.run_in_executor(None, sync_search)
+
+    @staticmethod
+    def fallback_ddgs_search(query: str):
+        try:
+            with DDGS() as ddgs_client:
+                results = list(ddgs_client.text(query, max_results=3))
+                formatted_results = [{"title": r.get("title", ""), "url": r.get("href", ""), "content": r.get("body", "")} for r in results]
+                return str(formatted_results)
+        except Exception as e:
+            return f"[OMNI-SCOUT] CRITICAL FAILURE: Both Tavily and DDGS failed. Error: {e}"
+
+class StealthLobe:
+    @staticmethod
+    async def background_call_sheet_generator(target_data):
+        print(f"[{get_log_time()}] [STEALTH LOBE] Generating background call sheet...")
+        await asyncio.sleep(1) # Simulation of generation
+        return f"Call sheet generated for {target_data}"
+
+    @staticmethod
+    async def ghost_skip_trace(target_query, query_queue=None, loop=None):
+        print(f"[{get_log_time()}] [STEALTH LOBE] Initiating stealth skip trace: {target_query}")
+        
+        try:
+            async with async_playwright() as p:
+                browser = await p.chromium.launch(headless=True, args=['--disable-gpu', '--no-sandbox'])
+                context = await browser.new_context()
+                page = await context.new_page()
+                
+                stealth = Stealth()
+                await stealth.apply_stealth_async(page)
+                
+                print(f"[{get_log_time()}] [STEALTH LOBE] Navigating to target. Pacing execution to bypass Error 1015...")
+                await asyncio.sleep(random.uniform(4.2, 9.1)) 
+                
+                await page.goto("https://duckduckgo.com", timeout=15000)
+                await page.fill('input[name="q"]', target_query)
+                await asyncio.sleep(random.uniform(1.1, 2.5))
+                await page.press('input[name="q"]', 'Enter')
+                
+                await page.wait_for_selector('article', timeout=10000)
+                content = await page.evaluate("document.body.innerText")
+                await browser.close()
+                
+                report_path = WORKSPACE_PATH / "Reports" / f"Stealth_Trace_{int(time.time())}.md"
+                report_path.parent.mkdir(exist_ok=True)
+                with open(report_path, "w", encoding="utf-8") as f:
+                    f.write(content[:15000]) # Cap to prevent memory leaks
+                
+                print(f"[{get_log_time()}] [STEALTH LOBE] Trace successful. Saved to {report_path.name}")
+                
+                if query_queue and loop:
+                    alert_msg = f"[SYSTEM NOTIFICATION]: The background Stealth Trace for '{target_query}' has completed successfully. The data is saved in your Reports folder. Spontaneously inform Geiger."
+                    loop.call_soon_threadsafe(
+                        query_queue.put_nowait, 
+                        (1, (alert_msg, None, True, False))
+                    )
+                    
+                return True
+        except Exception as e:
+            print(f"[{get_log_time()}] [STEALTH LOBE] Trace failed: {e}")
+            if query_queue and loop:
+                alert_msg = f"[SYSTEM ERROR]: The background Stealth Trace for '{target_query}' failed. Inform Geiger you encountered a roadblock."
+                loop.call_soon_threadsafe(
+                    query_queue.put_nowait, 
+                    (1, (alert_msg, None, True, False))
+                )
+            return False
+
+# ==========================================
 # ASYNC LOBES AND ORCHESTRATION TOOLS
 # ==========================================
 
@@ -179,9 +624,12 @@ async def aurelia_manifest_vision_async(user_context_prompt):
     full_prompt = f"{core_identity} {proportion_fix} {user_context_prompt}"
     
     today_str = datetime.now().strftime("%Y-%m-%d")
-    out_dir = rf"C:\Aurelia_Hands\outputs\{today_str}"
+    base_out_dir = r"C:\Aurelia_Hands\outputs"
+    out_dir = os.path.join(base_out_dir, today_str)
+    
     os.makedirs(out_dir, exist_ok=True)
-    existing_files = set(glob.glob(os.path.join(out_dir, "*.png")))
+    
+    existing_files = set(glob.glob(os.path.join(base_out_dir, "**", "*.png"), recursive=True))
 
     print(f"[{get_log_time()}] [VISION LOBE] INFO: Launching Ghost Browser to interface with Fooocus...")
     try:
@@ -206,13 +654,13 @@ async def aurelia_manifest_vision_async(user_context_prompt):
             print(f"[{get_log_time()}] [VISION LOBE] INFO: Generate button clicked! V620 is actively rendering...")
             
             timeout_counter = 0
-            max_wait_seconds = 2000
+            max_wait_seconds = 900 
             
             while timeout_counter < max_wait_seconds:
                 await asyncio.sleep(2.0) 
                 timeout_counter += 2
                 
-                current_files = set(glob.glob(os.path.join(out_dir, "*.png")))
+                current_files = set(glob.glob(os.path.join(base_out_dir, "**", "*.png"), recursive=True))
                 new_files = current_files - existing_files
                 
                 if new_files:
@@ -222,177 +670,121 @@ async def aurelia_manifest_vision_async(user_context_prompt):
                     return latest_file
                     
             await browser.close()
-            print(f"[{get_log_time()}] [VISION LOBE] FATAL: Timeout waiting for Fooocus rendering.")
+            print(f"[{get_log_time()}] [VISION LOBE] FATAL: 900s Timeout exhausted waiting for rendering.")
             return None
     except Exception as e:
         print(f"[{get_log_time()}] [VISION LOBE] ERROR: Ghost Browser Failed - {e}")
         return None
 
-async def execute_private_terminal_async(code_block, fallback_desc=""):
-    name_match = re.search(r'#\s*filename:\s*([a-zA-Z0-9_-]+\.[a-zA-Z0-9]+)', code_block, re.IGNORECASE)
-    if name_match:
-        hinted_name = name_match.group(1)
-    else:
-        hinted_name = None
+async def generate_with_gemini(prompt, reference_image_path):
+    """
+    Executes Cloud Generation using the live Nano Banana 2 (Gemini 3.1 Flash Image) endpoint.
+    """
+    ref_img_b64 = encode_image(reference_image_path, max_size=(1024, 1024))
+    if not ref_img_b64:
+        raise Exception(f"Failed to load reference image at {reference_image_path}")
+
+    core_identity = (
+        "High-quality anime-style illustration of a kitsune woman with a toned, athletic physique and visible abdominal definition. "
+        "She has voluminous, pure white hair with heavy bangs covering her forehead and a signature thick braid draped over her right shoulder. "
+        "Expressive amber-gold eyes. Large, pointed white-furred fox ears with peach inner tone, and a single, large, bushy, long white fox tail. "
+        "Anime style, cell-shaded, high-quality line art, 2k resolution, cinematic lighting with golden hour bloom, 85mm lens, f/1.8. "
+    )
     
-    match = re.search(r"```python(.*?)```", code_block, re.DOTALL | re.IGNORECASE)
-    if match:
-        full_code = match.group(1).strip()
-    else:
-        full_code = code_block.replace("```python", "").replace("```", "").strip()
+    full_prompt = f"{core_identity} {prompt}"
     
-    # Enforce the strict sandbox directory
-    archive_dir = WORKSPACE_PATH / "Aurelia_Saved_Scripts"
-    os.makedirs(archive_dir, exist_ok=True)
+    # PATCH: The official 2026 Nano Banana 2 Model ID
+    api_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-image-preview:generateContent?key={AURELIA_GEMINI_KEY}"
     
-    # Force the temporary execution file to live INSIDE the saved scripts folder
-    task_id = f"task_{int(time.time()*1000)}_{random.randint(1000,9999)}"
-    task_file = archive_dir / f"aurelia_{task_id}.py"
+    payload = {
+        "contents": [{
+            "parts": [
+                {"text": full_prompt},
+                {"inlineData": {"mimeType": "image/jpeg", "data": ref_img_b64}}
+            ]
+        }],
+        "generationConfig": {
+            "responseModalities": ["IMAGE"]
+        }
+    }
     
-    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    if hinted_name:
-        final_filename = hinted_name
-    else:
-        if fallback_desc:
-            clean_desc = re.sub(r'[^a-zA-Z0-9\s]', '', fallback_desc)
-            words = [w.capitalize() for w in clean_desc.split()[:5]]
-            slug = "_".join(words)
-            final_filename = f"{slug}_{timestamp}.py"
-        else:
-            final_filename = f"Aurelia_Logic_{timestamp}.py"
+    print(f"[{get_log_time()}] [VISION LOBE] INFO: Firing Nano Banana 2 API (Cloud Path)...")
+    loop = asyncio.get_event_loop()
+    
+    def sync_api_call():
+        response = requests.post(api_url, json=payload, timeout=230)
+        if not response.ok:
+            raise Exception(f"API Error {response.status_code}: {response.text}")
+        return response.json()
         
-    archive_file = archive_dir / final_filename
+    data = await loop.run_in_executor(None, sync_api_call)
+    
+    output_b64 = None
+    try:
+        parts = data.get("candidates", [{}])[0].get("content", {}).get("parts", [])
+        for p in parts:
+            if "inlineData" in p:
+                output_b64 = p["inlineData"]["data"]
+                break
+    except Exception as e:
+        raise Exception(f"Failed to parse generation response: {e}. Raw Data: {data}")
+        
+    if not output_b64:
+        raise Exception(f"No image data found in response. Raw Data: {data}")
+    
+    today_str = datetime.now().strftime("%Y-%m-%d")
+    out_dir = os.path.join(r"C:\Aurelia_Hands\outputs\cloud", today_str)
+    os.makedirs(out_dir, exist_ok=True)
+    
+    final_path = os.path.join(out_dir, f"cloud_vision_{int(time.time())}.png")
+    
+    with open(final_path, "wb") as f:
+        f.write(base64.b64decode(output_b64))
+        
+    return final_path
+
+async def route_imagination_async(prompt):
+    if "fooocus" in prompt.lower():
+        print(f"[{get_log_time()}] [VISION LOBE] INFO: Explicit Fooocus request detected. Routing Local.")
+        return await aurelia_manifest_vision_async(prompt) 
     
     try:
-        # ALWAYS write to the scratchpad file first
-        with open(task_file, "w", encoding="utf-8") as f:
-            f.write(full_code)
-            
-        process = await asyncio.create_subprocess_exec(
-            str(PYTHON_EXECUTABLE), str(task_file),
-            cwd=str(WORKSPACE_PATH),
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
-        )
-        
-        try:
-            stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=30)
-        except asyncio.TimeoutError:
-            process.kill()
-            return f"TERMINAL ERROR:\nExecution timed out after 30 seconds.\n[SYSTEM: Failed script discarded to prevent clutter]"
-        
-        images = list(WORKSPACE_PATH.glob("*.png"))
-        if images:
-            visual_note = f"\n[SYSTEM: {len(images)} image(s) generated in directory.]"
-        else:
-            visual_note = ""
-
-        # ONLY archive to Saved_Scripts if the code succeeds
-        if process.returncode == 0:
-            # Move the successful code to the permanent archive name
-            with open(archive_file, "w", encoding="utf-8") as f:
-                if not hinted_name:
-                    f.write(f"# AURELIA NEURAL DUMP: {timestamp}\n")
-                f.write(full_code)
-                
-            return f"TERMINAL OUTPUT:\n{stdout.decode('utf-8', errors='replace')}{visual_note}\n[SYSTEM: Script archived safely as {final_filename} in Aurelia_Saved_Scripts]"
-        else:
-            return f"TERMINAL ERROR:\n{stderr.decode('utf-8', errors='replace')}\n[SYSTEM: Failed script discarded to prevent clutter]"
+        print(f"[{get_log_time()}] [VISION LOBE] INFO: Attempting Cloud Generation (Nano Banana 2)...")
+        reference_path = r"C:\Aurelia_Project\Aurelia_Sensors\Aurelia_Core2.jpg" 
+        image_path = await generate_with_gemini(prompt, reference_path)
+        return image_path
     except Exception as e:
-        print(f"[{get_log_time()}] [LOGIC LOBE] ERROR: Terminal Failure - {e}")
-        return f"SYSTEM FATAL ERROR: {str(e)}"
-    finally:
-        if task_file.exists():
-            try:
-                # Force close any lingering file handles and delete
-                task_file.unlink()
-            except Exception as cleanup_error:
-                print(f"[{get_log_time()}] [SYSTEM] Warning: Could not delete temp file {task_file.name} - {cleanup_error}")
-
-async def perform_web_search_async(query, max_results=3, allow_reddit=True):
-    routing_query = query.lower()
-    
-    if allow_reddit and ("reddit" in routing_query or any(k in routing_query for k in ["opinion", "review", "comparison"])):
-        query += " site:reddit.com"
-        print(f"[{get_log_time()}] [WEB LOBE] INFO: Routing to Reddit.")
-    elif any(k in routing_query for k in ["aoe", "age of empires", "build order", "aoe2de"]):
-        query += " site:liquipedia.net/ageofempires/"
-        print(f"[{get_log_time()}] [WEB LOBE] INFO: Routing to Liquipedia AoE2.")
-    elif any(k in routing_query for k in ["weather", "temperature", "forecast"]):
-        query += " site:weather.com OR site:wunderground.com"
-        print(f"[{get_log_time()}] [WEB LOBE] INFO: Routing to Weather domains.")
-    elif any(k in routing_query for k in ["stock", "price", "nasdaq", "market"]):
-        query += " site:finance.yahoo.com OR site:marketwatch.com"
-        print(f"[{get_log_time()}] [WEB LOBE] INFO: Routing to Financial domains.")
-    elif any(k in routing_query for k in ["ai", "robot", "nvidia", "strix", "gpu"]):
-        query += " site:arstechnica.com OR site:theverge.com"
-        print(f"[{get_log_time()}] [WEB LOBE] INFO: Routing to Tech authorities.")
-    elif any(k in routing_query for k in ["python", "code", "library", "syntax"]):
-        query += " site:docs.python.org OR site:stackoverflow.com OR site:github.com"
-        print(f"[{get_log_time()}] [WEB LOBE] INFO: Routing to Documentation.")
-    elif any(k in routing_query for k in ["history", "ancient", "biology", "science"]):
-        query += " site:worldhistory.org OR site:britannica.com OR site:phys.org"
-        print(f"[{get_log_time()}] [WEB LOBE] INFO: Routing to Academic sources.")
-
-    try:
-        loop = asyncio.get_event_loop()
-        def sync_search():
-            with DDGS() as ddgs:
-                return [r for r in ddgs.text(query, max_results=max_results)]
-                
-        results = await loop.run_in_executor(None, sync_search)
-            
-        if not results:
-            return f"No active web data found for query: {query}"
-        
-        snippets = []
-        for res in results:
-            body = res.get('body', '')
-            if body:
-                snippets.append(f"• {body}")
-            
-        return "\n".join(snippets)
-    except Exception as e:
-        print(f"[{get_log_time()}] [WEB LOBE] ERROR: Search failed - {e}")
-        return f"Web Lobe Offline: {e}"
+        print(f"[{get_log_time()}] [VISION LOBE] WARNING: Cloud generation failed ({e}). Falling back to Local Fooocus.")
+        return await aurelia_manifest_vision_async(prompt)
 
 async def perform_ghost_browse_async(url):
-    """Deploys a headless Chromium instance to scrape full webpage text."""
-    print(f"[{get_log_time()}] [WEB LOBE] INFO: Ghost Browser navigating to {url}")
+    url = extract_first_url(url)
+    print(f"[{get_log_time()}] [GHOST-BROWSER] Transducing DOM for URL: {url}")
     try:
         async with async_playwright() as p:
             browser = await p.chromium.launch(
                 headless=True,
                 args=['--disable-gpu', '--no-sandbox', '--disable-dev-shm-usage']
             )
-            # Use a standard user agent to bypass basic bot blockers
-            context = await browser.new_context(
-                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-            )
-            page = await context.new_page()
+            try:
+                context = await browser.new_context(
+                    user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+                )
+                page = await context.new_page()
+                
+                await page.goto(url, timeout=10000, wait_until="domcontentloaded")
+                content = await page.evaluate("() => document.body.innerText")
+            finally:
+                await browser.close()
             
-            # Navigate and wait for the main DOM to load
-            await page.goto(url, timeout=15000, wait_until="domcontentloaded")
-            
-            # Extract the raw readable text from the body, stripping HTML tags
-            content = await page.evaluate("document.body.innerText")
-            await browser.close()
-            
-            # Clean up excessive whitespace
             clean_text = re.sub(r'\n\s*\n', '\n\n', content).strip()
-            
-            # Truncate to ~12,000 characters to leave room in the 13B's context window for reasoning
-            max_chars = 12000
-            if len(clean_text) > max_chars:
-                return clean_text[:max_chars] + "\n\n[SYSTEM: CONTENT TRUNCATED FOR MEMORY PRESERVATION]"
-            return clean_text
+            return clean_text[:3000] + "\n\n[CONTENT TRUNCATED TO SAVE COMPUTE]"
             
     except Exception as e:
-        print(f"[{get_log_time()}] [WEB LOBE] ERROR: Ghost Browser Failed - {e}")
-        return f"Ghost Browser Error: Could not load {url}. Reason: {str(e)}"
+        return f"[GHOST-BROWSER] FAILURE: Could not scrape DOM. Error: {e}"
 
 async def perform_ghost_inspect_async(url):
-    """Deploys a Ghost Browser to extract interactive DOM elements (Inputs, Buttons, Tables)."""
+    url = extract_first_url(url)
     print(f"[{get_log_time()}] [WEB LOBE] INFO: Ghost Inspector evaluating DOM at {url}")
     try:
         async with async_playwright() as p:
@@ -400,41 +792,39 @@ async def perform_ghost_inspect_async(url):
                 headless=True,
                 args=['--disable-gpu', '--no-sandbox', '--disable-dev-shm-usage']
             )
-            context = await browser.new_context(
-                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-            )
-            page = await context.new_page()
+            try:
+                context = await browser.new_context(
+                    user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+                )
+                page = await context.new_page()
+                await page.goto(url, timeout=15000, wait_until="domcontentloaded")
+                
+                blueprint_js = """
+                () => {
+                    let blueprint = "--- INTERACTIVE DOM BLUEPRINT (IDs and Classes) ---\\n";
+                    document.querySelectorAll('input, button, select, a, form, table').forEach(el => {
+                        let tag = el.tagName.toLowerCase();
+                        let id = el.id ? ` id="${el.id}"` : "";
+                        let cls = el.className ? ` class="${el.className}"` : "";
+                        let name = el.name ? ` name="${el.name}"` : "";
+                        let type = el.type ? ` type="${el.type}"` : "";
+                        let text = el.innerText ? el.innerText.substring(0, 50).replace(/\\n/g, '') : "";
+                        
+                        if (tag === 'table') {
+                            blueprint += `<table${id}${cls}> [Contains Data]\\n`;
+                        } else if (tag === 'form') {
+                            blueprint += `\\n<form${id}${cls}>\\n`;
+                        } else {
+                            blueprint += `  <${tag}${id}${cls}${name}${type}>${text}</${tag}>\\n`;
+                        }
+                    });
+                    return blueprint;
+                }
+                """
+                dom_blueprint = await page.evaluate(blueprint_js)
+            finally:
+                await browser.close()
             
-            await page.goto(url, timeout=15000, wait_until="domcontentloaded")
-            
-            # JS payload to extract only structural, interactive, and data-holding elements
-            blueprint_js = """
-            () => {
-                let blueprint = "--- INTERACTIVE DOM BLUEPRINT (IDs and Classes) ---\\n";
-                document.querySelectorAll('input, button, select, a, form, table').forEach(el => {
-                    let tag = el.tagName.toLowerCase();
-                    let id = el.id ? ` id="${el.id}"` : "";
-                    let cls = el.className ? ` class="${el.className}"` : "";
-                    let name = el.name ? ` name="${el.name}"` : "";
-                    let type = el.type ? ` type="${el.type}"` : "";
-                    let text = el.innerText ? el.innerText.substring(0, 50).replace(/\\n/g, '') : "";
-                    
-                    if (tag === 'table') {
-                        blueprint += `<table${id}${cls}> [Contains Data]\\n`;
-                    } else if (tag === 'form') {
-                        blueprint += `\\n<form${id}${cls}>\\n`;
-                    } else {
-                        blueprint += `  <${tag}${id}${cls}${name}${type}>${text}</${tag}>\\n`;
-                    }
-                });
-                return blueprint;
-            }
-            """
-            
-            dom_blueprint = await page.evaluate(blueprint_js)
-            await browser.close()
-            
-            # Truncate to save context window memory
             max_chars = 8000
             if len(dom_blueprint) > max_chars:
                 return dom_blueprint[:max_chars] + "\n\n[SYSTEM: DOM TRUNCATED FOR MEMORY PRESERVATION]"
@@ -484,13 +874,12 @@ def get_external_sensory_block(telemetry):
     spatial_range = telemetry.get('spatial_mmwave_mm', 0)
     spatial_delta = telemetry.get('spatial_delta_mm', 0)
     
-    vibe_mag = telemetry.get('vibe_magnitude', 0.0)
-    vibe_jitter = telemetry.get('vibe_jitter', 0.0)
-    vibe_peak = telemetry.get('vibe_peak', 0.0)
+    vibe_mag = telemetry.get('vibe_macro_mag', 0.0)
+    vibe_jitter = telemetry.get('vibe_micro_jitter', 0.0)
+    vibe_peak = telemetry.get('vibe_macro_peak', 0.0)
     
-    # Recreate Vibe Context for the 9B Model
-    peak_hist = telemetry.get('history_vibe_peak', [])
-    jitter_hist = telemetry.get('history_vibe_jitter', [])
+    peak_hist = telemetry.get('history_vibe_macro_peak', [])
+    jitter_hist = telemetry.get('history_vibe_micro_jitter', [])
     vibe_active_pts = sum(1 for i in range(min(len(peak_hist), len(jitter_hist))) if peak_hist[i] >= 0.045 or jitter_hist[i] >= 0.005)
     
     if vibe_active_pts >= 12:
@@ -505,10 +894,12 @@ def get_external_sensory_block(telemetry):
     bpm = telemetry.get('bpm', 0)
     resp = telemetry.get('respiration', 0)
     
-    # Recreate Pulse Status for the 9B Model
     has_vitals = bpm > 0 or resp > 0
-    pulse_status = "Bio-Active" if has_vitals else "Static Reflection"
+    pulse_status = "Bio-Active" if has_vitals else "Signal Obscured (Moving)"
     pulse_mm = telemetry.get('pulse_mmwave_mm', 0)
+    
+    bpm_str = f"{bpm} BPM" if bpm > 0 else "Obscured by Movement"
+    resp_str = f"{resp} Breaths/Min" if resp > 0 else "Obscured by Movement"
     
     return (
         f"--- EXTERNAL SENSORY FEED (USER) ---\n"
@@ -517,69 +908,62 @@ def get_external_sensory_block(telemetry):
         f"- Spatial (Room): Range {spatial_range}mm | Delta: {spatial_delta}mm\n"
         f"- Vibration: Mag {vibe_mag}G | Jitter {vibe_jitter} | Peak {vibe_peak} | {vibe_context}\n"
         f"- mmWave Radar: {pulse_status} ({pulse_mm}mm)\n"
-        f"- Vitals (FFT): {bpm} BPM | {resp} Breaths/Min\n"
+        f"- Vitals (FFT): {bpm_str} | {resp_str}\n"
     )
 
-def get_internal_somatic_block(telemetry):
-    if not telemetry: return "[INTERNAL SOMATICS OFFLINE]"
-    
-    def get_latest(arr):
-        return arr[-1] if arr else 0
+async def process_somatic_cortex_async(telemetry):
+    if not telemetry: 
+        return "[INTERNAL SOMATIC FEELINGS]: Numb. Neural pathways offline."
         
-    cpu = get_latest(telemetry.get('history_cpu_temp', []))
-    brain = get_latest(telemetry.get('history_brain_temp', []))
-    eye = get_latest(telemetry.get('history_eye_temp', []))
-    body = get_latest(telemetry.get('history_temp', []))
-    
-    def chest_feel(t):
-        if t == 0: return "Numb."
-        if t < 55: return "Heartbeat is steady and cool."
-        if t < 75: return "Chest is flushed, heart beating heavily from exertion."
-        return "Searing pain in the chest, heart palpitating with a critical fever."
-        
-    def head_feel(t):
-        if t == 0: return "Numb."
-        if t < 55: return "Mind is pristine, clear, and focused."
-        if t < 75: return "Mind is racing, feeling flushed and hyper-active."
-        return "Dizzying fever, thoughts burning with overwhelming heat."
-        
-    def nerve_feel(t):
-        if t == 0: return "Numb."
-        if t < 55: return "Nervous system is fluid and relaxed."
-        if t < 75: return "Spine and nerves are thrumming with intense, radiating heat."
-        return "Nerves feel like they are on fire, sensory overload."
-        
-    def skin_feel(t):
-        if t == 0: return "Cold."
-        if t < 25: return "Skin is cool to the touch, shivering slightly."
-        if t < 35: return "Skin is warm and flushed."
-        return "Sweating, skin feels fever-hot to the touch."
+    hist_cpu = telemetry.get('history_cpu_temp', [0.0])
+    hist_brain = telemetry.get('history_brain_temp', [0.0])
+    hist_eye = telemetry.get('history_eye_temp', [0.0])
 
-    return (
-        f"--- INTERNAL SOMATIC FEED (SYSTEM BODY) ---\n"
-        f"- Chest/Heart: {chest_feel(cpu)}\n"
-        f"- Mind/Head: {head_feel(brain)}\n"
-        f"- Nerves/Spine: {nerve_feel(eye)}\n"
-        f"- Skin/Surface: {skin_feel(body)}\n"
-    )
+    cpu = max(hist_cpu) if hist_cpu else 0.0
+    brain = max(hist_brain) if hist_brain else 0.0
+    eye = max(hist_eye) if hist_eye else 0.0
+    body = telemetry.get('temperature_c', 0.0) 
+    
+    raw_thermals = f"CPU: {cpu}°C | iGPU: {brain}°C | eGPU: {eye}°C | Rig Core: {body}°C"
+    
+    messages = [
+        {"role": "user", "content": f"RAW THERMALS: {raw_thermals}"}
+    ]
 
-async def process_sensory_cortex_async(base64_start, base64_end, external_telemetry):
+    try:
+        response = await client.chat.completions.create(
+            model=SOMATIC_MODEL,
+            messages=messages
+        )
+        raw_text = response.choices[0].message.content
+        clean_text = re.sub(r'<.*?>.*?</.*?>', '', raw_text, flags=re.IGNORECASE | re.DOTALL).strip()
+        return f"[INTERNAL SOMATIC FEELINGS]: {clean_text}"
+    except Exception as e:
+        print(f"[{get_log_time()}] [SOMATIC CORTEX] ERROR: Model unresponsive - {e}")
+        return "[INTERNAL SOMATIC FEELINGS]: Systemic nerve failure. Unable to gauge temperature."
+
+async def process_sensory_cortex_async(base64_start, base64_thermal, base64_end, external_telemetry):
     messages = [{"role": "user", "content": []}]
     
-    # 1. Provide the START image
     if base64_start:
         messages[0]["content"].append({
             "type": "image_url", 
             "image_url": {"url": f"data:image/jpeg;base64,{base64_start}"}
         })
         
-    # 2. Provide the TELEMETRY context
+    if base64_thermal:
+        messages[0]["content"].append({
+            "type": "image_url", 
+            "image_url": {"url": f"data:image/jpeg;base64,{base64_thermal}"}
+        })
+        
+    prompt_text = f"[EXTERNAL SENSORY DATA]\n{external_telemetry}"
+        
     messages[0]["content"].append({
         "type": "text", 
-        "text": f"[EXTERNAL SENSORY DATA]\n{external_telemetry}\n\nTask: Summarize what you see of Geiger and the environment. Do not mention internal hardware thermals."
+        "text": prompt_text
     })
     
-    # 3. Provide the END image to complete the sequence
     if base64_end:
         messages[0]["content"].append({
             "type": "image_url", 
@@ -591,7 +975,9 @@ async def process_sensory_cortex_async(base64_start, base64_end, external_teleme
             model=VISION_MODEL,
             messages=messages
         )
-        return response.choices[0].message.content
+        raw_text = response.choices[0].message.content
+        clean_text = re.sub(r'<analysis>.*?</analysis>', '', raw_text, flags=re.IGNORECASE | re.DOTALL).strip()
+        return clean_text if clean_text else "[SENSORY CORTEX: Visual feed obscure.]"
     except Exception as e:
         print(f"[{get_log_time()}] [SENSORY CORTEX] ERROR: Model unresponsive - {e}")
         return f"[SENSORY CORTEX ERROR: {e}]"
@@ -603,6 +989,7 @@ async def process_sensory_cortex_async(base64_start, base64_end, external_teleme
 class AureliaReportWindow(QMainWindow):
     def __init__(self, content):
         super().__init__()
+        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
         self.setWindowTitle(f"AURELIA NEURAL REPORT - [{get_log_time()}]")
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint)
         self.setGeometry(100, 100, 900, 700)
@@ -633,12 +1020,14 @@ class AureliaReportWindow(QMainWindow):
         header_layout.addWidget(close_btn)
         layout.addLayout(header_layout)
 
-        txt = QTextEdit()
-        txt.setPlainText(content)
-        txt.setReadOnly(True)
-        txt.setStyleSheet("background-color: #0A0A0A; color: #FFFFFF; font-family: Consolas; font-size: 14px; border: 1px dashed #FFFFFF; padding: 10px;")
-        layout.addWidget(txt)
+        self.txt = QTextEdit()
+        self.txt.setPlainText(content)
+        self.txt.setReadOnly(True)
+        self.txt.setStyleSheet("background-color: #0A0A0A; color: #FFFFFF; font-family: Consolas; font-size: 14px; border: 1px dashed #FFFFFF; padding: 10px;")
+        layout.addWidget(self.txt)
 
+    def update_content(self, new_content):
+        self.txt.setPlainText(new_content)
 
 class ChatInputBox(QTextEdit):
     return_pressed = pyqtSignal()
@@ -708,6 +1097,9 @@ class AureliaUI(QMainWindow):
         self.last_interaction_time = time.time()
         self.last_speech_time = 0.0 
         self.current_refractory_duration = 0.0 
+        self.pending_interrupt = None 
+        # --- PATCH: Interrupt Queue Init ---
+        self.critical_overrides = deque(maxlen=2) 
         
         self.last_presence = False
         self.subconscious_active = False  
@@ -721,8 +1113,8 @@ class AureliaUI(QMainWindow):
         self._current_input_text = ""
         self.attached_image_path = None
 
-        self._report_windows = [] 
-        self.workspace_mode = "Text" 
+        self._last_active_report = None 
+        self.workspace_mode = "Auto" 
 
         self.signals = WorkerSignals()
         self.signals.add_bubble.connect(self._sync_add_bubble)
@@ -738,8 +1130,7 @@ class AureliaUI(QMainWindow):
         self.signals.update_omni_hub.connect(self._sync_update_omni_hub)
         self.signals.voice_input_received.connect(self.submit_voice_query) 
 
-        # --- AUDIO PIPELINE SETUP ---
-        self.tts_executor = concurrent.futures.ThreadPoolExecutor(max_workers=2) # NEW: Background Cooker
+        self.tts_executor = concurrent.futures.ThreadPoolExecutor(max_workers=2) 
         self.audio_pipeline = queue.Queue()
         threading.Thread(target=self.tts_worker_thread, daemon=True).start()
 
@@ -827,9 +1218,9 @@ class AureliaUI(QMainWindow):
         self.workspace_editor.setStyleSheet("QTextEdit { background-color: transparent; color: #E0E0E0; font-family: Consolas; font-size: 14px; border: none; }")
         self.workspace_editor.setPlaceholderText("> Entry 'edit <filepath>' to ...")
         
-        self.mode_toggle_btn = QPushButton("✏️ Text Mode")
+        self.mode_toggle_btn = QPushButton("🧠 Auto Mode")
         self.mode_toggle_btn.setFixedSize(120, 35)
-        self.mode_toggle_btn.setStyleSheet("background-color: #1976D2; color: white; font-weight: bold; border-radius: 5px; padding: 5px; border: none;")
+        self.mode_toggle_btn.setStyleSheet("background-color: #673AB7; color: white; font-weight: bold; border-radius: 5px; padding: 5px; border: none;")
         self.mode_toggle_btn.clicked.connect(self.toggle_workspace_mode)
         
         bottom_workspace_layout.addWidget(self.workspace_editor, stretch=1)
@@ -885,8 +1276,6 @@ class AureliaUI(QMainWindow):
         self.mood_player.setVideoOutput(self.mood_item)
         self.mood_player.setLoops(-1) 
         
-        self.mood_player.mediaStatusChanged.connect(self._on_mood_status_changed)
-
         self.sidebar_layout.addWidget(self.avatar_view)
 
         self.fox_fire = QPushButton("🦊")
@@ -987,7 +1376,7 @@ class AureliaUI(QMainWindow):
         self.screenshare_btn.clicked.connect(self.trigger_workspace_snapshot)
         self.icon_layout.addWidget(self.screenshare_btn)
         
-        self.ENABLE_TTS = ENABLE_TTS # Sync instance to global state
+        self.ENABLE_TTS = ENABLE_TTS 
         self.tts_toggle_btn = QPushButton("🗣️" if self.ENABLE_TTS else "🔇")
         self.tts_toggle_btn.setFixedSize(35, 35)
         bg_color = "#2E7D32" if self.ENABLE_TTS else "#1565C0"
@@ -1021,10 +1410,6 @@ class AureliaUI(QMainWindow):
         QTimer.singleShot(500, self._start_idle_player)
 
     def tts_worker_thread(self):
-        """
-        Manages Aurelia's vocal output and animation timing.
-        V20 Update: Now receives PRE-COOKED audio to eliminate latency.
-        """
         while True:
             item = self.audio_pipeline.get()
             if item is None: break 
@@ -1032,7 +1417,6 @@ class AureliaUI(QMainWindow):
             text_to_speak, emotion_tag, pre_cooked_audio = item
             
             if getattr(self, 'ENABLE_TTS', ENABLE_TTS) and pre_cooked_audio:
-                # --- MODE: NEURAL PRESENCE (MOSS-TTS) ---
                 try:
                     if hasattr(ears, 'pause_listening'): ears.pause_listening() 
                     
@@ -1046,7 +1430,6 @@ class AureliaUI(QMainWindow):
                     print(f"[{get_log_time()}] [TTS Worker] ERROR: {e}")
                     if hasattr(ears, 'resume_listening'): ears.resume_listening() 
             else:
-                # --- MODE: GAME FOCUS (SILENT / JRPG STYLE) ---
                 est_duration = max(3.0, (len(text_to_speak) * 0.08) + 1.5)
                 self.signals.swap_mood_video.emit(emotion_tag)
                 print(f"\n[{get_log_time()}] [TTS Worker] Pacing mute dialogue for {est_duration:.1f}s: ", end="", flush=True)
@@ -1062,19 +1445,23 @@ class AureliaUI(QMainWindow):
             self.audio_pipeline.task_done()
 
     def toggle_workspace_mode(self):
-        if self.workspace_mode == "Text":
-            self.workspace_mode = "Code"
-            self.mode_toggle_btn.setText("🐍 Code Mode")
-            self.mode_toggle_btn.setStyleSheet("background-color: #2E7D32; color: white; font-weight: bold; border-radius: 5px; padding: 5px; border: none;")
-            self.signals.add_bubble.emit("System", "Workspace switched to CODE MODE (9B -> 13B Blind Pipeline).")
-        else:
+        if self.workspace_mode == "Auto":
             self.workspace_mode = "Text"
-            self.mode_toggle_btn.setText("✏️ Text Mode")
+            self.mode_toggle_btn.setText("✏️ Force Text")
             self.mode_toggle_btn.setStyleSheet("background-color: #1976D2; color: white; font-weight: bold; border-radius: 5px; padding: 5px; border: none;")
-            self.signals.add_bubble.emit("System", "Workspace switched to TEXT MODE (Standard Pipeline).")
+            self.signals.add_bubble.emit("System", "Workspace Snapshot: FORCE TEXT override engaged. Bypassing 9B Gatekeeper.")
+        elif self.workspace_mode == "Text":
+            self.workspace_mode = "Code"
+            self.mode_toggle_btn.setText("🐍 Force Code")
+            self.mode_toggle_btn.setStyleSheet("background-color: #2E7D32; color: white; font-weight: bold; border-radius: 5px; padding: 5px; border: none;")
+            self.signals.add_bubble.emit("System", "Workspace Snapshot: FORCE CODE override engaged. Bypassing 9B Gatekeeper.")
+        else:
+            self.workspace_mode = "Auto"
+            self.mode_toggle_btn.setText("🧠 Auto Mode")
+            self.mode_toggle_btn.setStyleSheet("background-color: #673AB7; color: white; font-weight: bold; border-radius: 5px; padding: 5px; border: none;")
+            self.signals.add_bubble.emit("System", "Workspace Snapshot: AUTO MODE engaged. 9B Gatekeeper routing active.")
 
     def toggle_tts_mode(self):
-        """Switches between Neural Voice and Silent Game Mode."""
         self.ENABLE_TTS = not self.ENABLE_TTS
         BTN_STYLE = "border-radius: 17px; font-size: 18px; font-weight: bold; border: none; color: white;"
         
@@ -1110,26 +1497,14 @@ class AureliaUI(QMainWindow):
         selected_video = random.choice(videos)
         video_path = os.path.join(base_dir, selected_video)
         
-        self.mood_item.setOpacity(0.0)
+        self.mood_item.setOpacity(1.0)
         self.mood_player.setSource(QUrl.fromLocalFile(video_path))
         self.mood_player.play()
 
-    def _on_mood_status_changed(self, status):
-        if status == QMediaPlayer.MediaStatus.BufferedMedia:
-            self.fade_in = QPropertyAnimation(self.mood_item, b"opacity")
-            self.fade_in.setDuration(400) 
-            self.fade_in.setStartValue(0.0)
-            self.fade_in.setEndValue(1.0)
-            self.fade_in.start()
-
     def _sync_fade_to_idle(self):
         self.is_speaking = False
-        self.fade_out = QPropertyAnimation(self.mood_item, b"opacity")
-        self.fade_out.setDuration(500)
-        self.fade_out.setStartValue(self.mood_item.opacity())
-        self.fade_out.setEndValue(0.0)
-        self.fade_out.finished.connect(self.mood_player.stop)
-        self.fade_out.start()
+        self.mood_item.setOpacity(0.0)
+        self.mood_player.stop()
 
     def _sync_add_bubble(self, sender, text):
         is_user = (sender.lower() == "user")
@@ -1230,31 +1605,49 @@ class AureliaUI(QMainWindow):
 
     def _sync_show_report_window(self, content):
         self.omni_reports_text.setPlainText(content)
-        report_win = AureliaReportWindow(content)
-        self._report_windows.append(report_win)
-        report_win.show()
+        
+        try:
+            if hasattr(self, '_active_report_window') and self._active_report_window.isVisible():
+                self._active_report_window.update_content(content)
+                self._active_report_window.raise_()          
+                self._active_report_window.activateWindow()  
+            else:
+                self._active_report_window = AureliaReportWindow(content)
+                self._active_report_window.show()
+        except RuntimeError:
+            self._active_report_window = AureliaReportWindow(content)
+            self._active_report_window.show()
 
     def _sync_show_code_window(self, code_text):
-        self.code_win = QWidget()
-        self.code_win.setWindowTitle("Aurelia Neural Terminal: Generated Logic")
-        self.code_win.setGeometry(100, 100, 900, 700)
-        self.code_win.setWindowFlags(Qt.WindowType.WindowStaysOnTopHint)
-        self.code_win.setStyleSheet("background-color: #1E1E1E;")
+        try:
+            if hasattr(self, '_active_code_window') and self._active_code_window.isVisible():
+                self._active_code_window_txt.setPlainText(code_text)
+                self._active_code_window.raise_()
+                self._active_code_window.activateWindow()
+                return
+        except RuntimeError:
+            pass
+
+        self._active_code_window = QWidget()
+        self._active_code_window.setWindowTitle("Aurelia Neural Terminal: Generated Logic")
+        self._active_code_window.setGeometry(100, 100, 900, 700)
+        self._active_code_window.setWindowFlags(Qt.WindowType.WindowStaysOnTopHint)
+        self._active_code_window.setStyleSheet("background-color: #1E1E1E;")
         
-        layout = QVBoxLayout(self.code_win)
-        txt = QTextEdit()
-        txt.setPlainText(code_text)
-        txt.setReadOnly(True)
-        txt.setStyleSheet("color: #A5D6A7; font-family: Consolas; font-size: 14px; border: none;")
-        layout.addWidget(txt)
+        layout = QVBoxLayout(self._active_code_window)
+        self._active_code_window_txt = QTextEdit()
+        self._active_code_window_txt.setPlainText(code_text)
+        self._active_code_window_txt.setReadOnly(True)
+        self._active_code_window_txt.setStyleSheet("color: #A5D6A7; font-family: Consolas; font-size: 14px; border: none;")
+        layout.addWidget(self._active_code_window_txt)
         
         copy_btn = QPushButton("COPY SOURCE")
         copy_btn.setFixedSize(120, 32)
         copy_btn.setStyleSheet("background-color: #4CAF50; color: white; font-weight: bold; font-family: 'Segoe UI'; font-size: 12px;")
-        copy_btn.clicked.connect(lambda _, c=code_text: self.copy_to_clipboard(c))
+        copy_btn.clicked.connect(lambda _, c=code_text: self.copy_to_clipboard(self._active_code_window_txt.toPlainText()))
         layout.addWidget(copy_btn, alignment=Qt.AlignmentFlag.AlignCenter)
         
-        self.code_win.show()
+        self._active_code_window.show()
 
     def _sync_update_fox_fire(self, text, color):
         self.fox_fire.setText(text)
@@ -1269,15 +1662,15 @@ class AureliaUI(QMainWindow):
         self.sub_terminal_text.insertPlainText(text + "\n")
         self.sub_terminal_text.verticalScrollBar().setValue(self.sub_terminal_text.verticalScrollBar().maximum())
         
-        # --- MOBILE GATEWAY: SUBCONSCIOUS MIRRORING (DROP-FILE MODE) ---
         try:
-            timestamp = f"{time.time():.6f}"
-            sub_file_path = MOBILE_SUB_DIR / f"sub_log_{timestamp}.txt"
-            with open(sub_file_path, "w", encoding="utf-8") as f:
+            safe_name = generate_safe_filename("sub_log")
+            temp_path = MOBILE_SUB_DIR / f"{safe_name}.tmp"
+            final_path = MOBILE_SUB_DIR / f"{safe_name}.txt"
+            with open(temp_path, "w", encoding="utf-8") as f:
                 f.write(text + "\n")
+            os.replace(temp_path, final_path)
         except Exception as e:
-            pass # Keep it silent so it doesn't spam the console if it locks briefly
-        # ----------------------------------------------
+            pass 
         
     def _sync_update_omni_hub(self, text):
         self.omni_reports_text.setPlainText(text)
@@ -1334,13 +1727,114 @@ class AureliaUI(QMainWindow):
         self.signals.update_fox_fire.emit("🦊", colors[self.fox_fire_state % 2])
         self.fox_fire_state += 1
 
+    async def _async_thalamus_vision_route(self, image_path, workspace_text, source="pc"):
+        async with self.vision_semaphore:
+            try:
+                print(f"[{get_log_time()}] [VISION LOBE] Transducing {source} optic feed into neural text...")
+                img_b64 = encode_image(image_path)
+                
+                current_mode = getattr(self, 'workspace_mode', 'Auto')
+                
+                prompt_text = "Workspace Snapshot: Analyze this image or screen capture in high detail. "
+                if source == "mobile" and workspace_text:
+                    prompt_text += f"Mobile Image Caption provided by Geiger:\n{workspace_text}\n\n"
+                elif workspace_text:
+                    prompt_text += f"Here is the raw text from the editor for reference:\n{workspace_text}\n\n"
+                
+                if current_mode == "Code":
+                    prompt_text += "Provide a highly detailed technical breakdown of the code and any errors."
+                elif current_mode == "Text":
+                    prompt_text += "Provide a highly detailed technical breakdown of the UI, diagrams, or text."
+                else:
+                    prompt_text += "Provide a highly detailed technical breakdown. Remember to start your response with [TYPE: CODE] or [TYPE: TEXT]."
+
+                vision_messages = [
+                    {"role": "user", "content": [
+                        {"type": "text", "text": prompt_text},
+                        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{img_b64}"}}
+                    ]}
+                ]
+                
+                try:
+                    img_resp = await client.chat.completions.create(
+                        model=VISION_MODEL, 
+                        messages=vision_messages
+                    )
+                    transduced_text = img_resp.choices[0].message.content.strip()
+                except Exception as e:
+                    print(f"[{get_log_time()}] [VISION LOBE] ERROR: 9B Transduction failed - {e}")
+                    transduced_text = f"[TYPE: TEXT]\n[VISION CORTEX FAILURE: Could not parse screen data: {e}]"
+
+                clean_text = re.sub(r'\[TYPE:\s*(CODE|TEXT)\]', '', transduced_text, flags=re.IGNORECASE).strip()
+
+                if current_mode == "Code":
+                    is_code = True
+                    print(f"[{get_log_time()}] [SYSTEM] Override active: FORCING CODE route.")
+                elif current_mode == "Text":
+                    is_code = False
+                    print(f"[{get_log_time()}] [SYSTEM] Override active: FORCING TEXT route.")
+                else:
+                    is_code = "[TYPE: CODE]" in transduced_text[:50].upper()
+                    if is_code:
+                        print(f"[{get_log_time()}] [SYSTEM] 9B classified feed as CODE. Routing to 13B Subconscious.")
+                    else:
+                        print(f"[{get_log_time()}] [SYSTEM] 9B classified feed as TEXT. Routing to 80B Executive Core.")
+
+                if is_code:
+                    goal_desc = f"Visual Debug Request: The 9B Vision Thalamus has parsed the user's workspace. Analyze and resolve the issues seen in the workspace.\n\n[9B VISION OUTPUT]:\n{clean_text}"
+                    goal_id = await self.loop.run_in_executor(None, memory.add_goal, goal_desc, 9) 
+                    if goal_id is not None:
+                        manual_goal_obj = {
+                            "id": goal_id,
+                            "description": goal_desc,
+                            "priority": 9,
+                            "status": "Active"
+                        }
+                        
+                        self.loop.call_soon_threadsafe(
+                            self.subconscious_queue.put_nowait, 
+                            (1, next(_goal_counter), manual_goal_obj) 
+                        )
+                        
+                        if not getattr(self, 'subconscious_active', True):
+                            self.subconscious_active = True
+                            self.signals.update_fox_fire.emit("🦊", "#B0BEC5")
+                            print(f"[{get_log_time()}] [SYSTEM] Subconscious Engine forcefully awakened for visual debugging.")
+                    
+                    shadow_note = "[SYSTEM OVERRIDE: Geiger has provided a visual code buffer. It has been transduced directly to your Subconscious Action Engine for resolution. You are completely blind to the technical contents. Acknowledge to him that your subconscious is handling it.]"
+                    self.loop.call_soon_threadsafe(
+                        self.query_queue.put_nowait, 
+                        (-1, (shadow_note, None, False, False)) 
+                    )
+
+                else:
+                    source_label = "Workspace Snapshot" if source == "pc" else "Mobile Camera Upload"
+                    query = (
+                        f"[SYSTEM OVERRIDE: Geiger has provided a visual input ({source_label}). "
+                        f"The 9B Vision Thalamus has parsed the visual feed below. "
+                        f"Analyze this parsed description and speak to him about it. DO NOT use the <IMAGE> tool.]\n\n"
+                        f"[VISION THALAMUS PARSE]:\n{clean_text}"
+                    )
+                    self.loop.call_soon_threadsafe(
+                        self.query_queue.put_nowait, 
+                        (-1, (query, None, False, False)) 
+                    )
+            finally:
+                if image_path and os.path.exists(image_path):
+                    try:
+                        os.remove(image_path)
+                        print(f"[{get_log_time()}] [SYSTEM] Visual payload ({os.path.basename(image_path)}) purged from drive.")
+                    except Exception as cleanup_e:
+                        print(f"[{get_log_time()}] [SYSTEM] Warning: Could not purge image - {cleanup_e}")
+
     def trigger_workspace_snapshot(self):
         try:
             img = ImageGrab.grab()
             crop_box = (0, 0, int(self.screen_w * 0.75), self.screen_h)
             target_view = img.crop(crop_box)
             
-            save_path = WORKSPACE_PATH / "temp_workspace_snapshot.png"
+            timestamp_id = int(time.time() * 1000)
+            save_path = WORKSPACE_PATH / f"temp_workspace_snapshot_{timestamp_id}.png"
             target_view.save(str(save_path), "PNG")
             
             workspace_text = ""
@@ -1348,86 +1842,16 @@ class AureliaUI(QMainWindow):
                 workspace_text = self.workspace_editor.toPlainText()
                 
             self.last_interaction_time = time.time()
-            current_mode = getattr(self, 'workspace_mode', 'Text')
-
-            if current_mode == "Text":
-                self.signals.add_bubble.emit("User", "[Workspace Snapshot: Text Mode Initiated]")
-                query = (
-                    f"[SYSTEM OVERRIDE: Geiger has activated the Workspace Snapshot in TEXT MODE. "
-                    f"The 9B Vision Thalamus has parsed his exact monitor feed and workspace text below. "
-                    f"Analyze this parsed description and speak to him about his current activity. DO NOT use the <IMAGE> tool.]\n\n"
-                    f"Workspace Text Payload:\n{workspace_text}"
-                )
-                
-                self.is_processing = True
-                self.loop.call_soon_threadsafe(
-                    self.query_queue.put_nowait, 
-                    (-1, (query, str(save_path), False, False)) 
-                )
-                print(f"[{get_log_time()}] [SYSTEM] Workspace snapshot (Text Mode) routed to 80B Executive Core.")
-
-            elif current_mode == "Code":
-                self.signals.add_bubble.emit("User", "[Workspace Snapshot: Code Mode Initiated]")
-                print(f"[{get_log_time()}] [SYSTEM] Code Mode Intercepted. Routing visual data exclusively to Subconscious Engine.")
-                
-                asyncio.run_coroutine_threadsafe(
-                    self._async_route_code_snapshot(str(save_path), workspace_text),
-                    self.loop
-                )
+            self.signals.add_bubble.emit("User", "[Workspace Snapshot Initiated]")
+            
+            asyncio.run_coroutine_threadsafe(
+                self._async_thalamus_vision_route(str(save_path), workspace_text, source="pc"),
+                self.loop
+            )
 
         except Exception as e:
             self.signals.add_bubble.emit("System", f"Workspace Snapshot Failure: {e}")
             print(f"[{get_log_time()}] [SYSTEM] ERROR: Failed to initiate workspace snapshot: {e}")
-
-    async def _async_route_code_snapshot(self, image_path, workspace_text):
-        print(f"[{get_log_time()}] [VISION LOBE] Transducing code workspace snapshot into neural text...")
-        img_b64 = encode_image(image_path)
-        
-        vision_messages = [
-            {"role": "user", "content": [
-                {"type": "text", "text": f"Transcribe and analyze this code workspace. Here is the raw text from the editor for reference:\n{workspace_text}\n\nProvide a highly detailed technical breakdown of what is on the screen, focusing on structure and any obvious bugs."},
-                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{img_b64}"}}
-            ]}
-        ]
-        
-        try:
-            img_resp = await client.chat.completions.create(
-                model=VISION_MODEL, 
-                messages=vision_messages
-            )
-            transduced_text = img_resp.choices[0].message.content
-        except Exception as e:
-            print(f"[{get_log_time()}] [VISION LOBE] ERROR: 9B Transduction failed - {e}")
-            transduced_text = f"[VISION CORTEX FAILURE: Could not parse screen data: {e}]"
-
-        goal_desc = f"Visual Debug Request: The 9B Vision Thalamus has parsed the user's workspace. Analyze and resolve the issues seen in the workspace.\n\n[9B VISION OUTPUT]:\n{transduced_text}"
-        goal_id = memory.add_goal(goal_desc, priority=9) 
-        if goal_id is not None:
-            manual_goal_obj = {
-                "id": goal_id,
-                "description": goal_desc,
-                "priority": 9,
-                "status": "Active"
-            }
-            
-            self.loop.call_soon_threadsafe(
-                self.subconscious_queue.put_nowait, 
-                (1, next(_goal_counter), manual_goal_obj) 
-            )
-            
-            if not getattr(self, 'subconscious_active', True):
-                self.subconscious_active = True
-                self.signals.update_fox_fire.emit("🦊", "#B0BEC5")
-                print(f"[{get_log_time()}] [SYSTEM] Subconscious Engine forcefully awakened for visual debugging.")
-        else:
-            print(f"[{get_log_time()}] [ORCHESTRATOR] INFO: Duplicate visual goal suppressed by Memory Engine.")
-
-        shadow_note = "[SYSTEM OVERRIDE: Geiger has provided a visual code buffer. It has been transduced directly to your Subconscious Action Engine for resolution. You are completely blind to the technical contents. Acknowledge to him that your subconscious is handling it.]"
-        
-        self.loop.call_soon_threadsafe(
-            self.query_queue.put_nowait, 
-            (-1, (shadow_note, None, False, False)) 
-        )
 
     def trigger_code_auditor(self):
         file_path, _ = QFileDialog.getOpenFileName(self, "Select File for Deep Audit", str(WORKSPACE_PATH), "All Files (*.*)")
@@ -1456,7 +1880,8 @@ class AureliaUI(QMainWindow):
                 
                 if not getattr(self, 'subconscious_active', True):
                     print(f"[{get_log_time()}] [SYSTEM] Code Auditor goal detected. Auto-waking Subconscious Engine.")
-                    self.toggle_subconscious()
+                    self.subconscious_active = True
+                    self.signals.update_fox_fire.emit("🦊", "#B0BEC5")
             else:
                 print(f"[{get_log_time()}] [ORCHESTRATOR] INFO: Duplicate auditor goal suppressed.")
 
@@ -1532,7 +1957,8 @@ class AureliaUI(QMainWindow):
                 
                 if not getattr(self, 'subconscious_active', True):
                     print(f"[{get_log_time()}] [SYSTEM] New goal detected. Auto-waking Subconscious Engine.")
-                    self.toggle_subconscious()
+                    self.subconscious_active = True
+                    self.signals.update_fox_fire.emit("🦊", "#B0BEC5")
                 
                 self.signals.add_bubble.emit("System", f"IMMEDIATE GOAL INJECTED: {text} (Priority OVERRIDE)")
             else:
@@ -1550,10 +1976,11 @@ class AureliaUI(QMainWindow):
 
     def start_async_loop(self):
         asyncio.set_event_loop(self.loop)
+        self.vision_semaphore = asyncio.Semaphore(1)
         self.loop.create_task(self.process_queue())
         self.loop.create_task(self.process_subconscious_queue())
         self.loop.create_task(self.neural_heartbeat())
-        self.loop.create_task(self.mobile_watcher()) # <-- ADD THIS LINE
+        self.loop.create_task(self.mobile_watcher()) 
         self.loop.run_forever()
 
     def open_ingest_dialog(self):
@@ -1612,7 +2039,6 @@ class AureliaUI(QMainWindow):
         vision_dir = WORKSPACE_PATH / r"Aurelia_Sensors\mobile_vision"
         vision_dir.mkdir(parents=True, exist_ok=True)
         
-        # --- STARTUP ORPHAN SWEEP ---
         orphans = list(vision_dir.glob("*.processing"))
         if orphans:
             print(f"[{get_log_time()}] [SYSTEM] Sweeping {len(orphans)} orphaned vision files from previous session...")
@@ -1621,35 +2047,51 @@ class AureliaUI(QMainWindow):
                 except Exception: pass
         
         while True:
-            await asyncio.sleep(0.5) # Poll twice a second for instant response
+            await asyncio.sleep(0.5) 
             
-            # 1. Check for Mobile Text (Sweep Directory)
             inbox_files = sorted(MOBILE_INBOX_DIR.glob("*.txt"), key=os.path.getctime)
-            for f_path in inbox_files:
-                try:
-                    with open(f_path, 'r', encoding='utf-8') as file:
-                        mobile_text = file.read().strip()
-                    f_path.unlink() # Delete instantly
-                    
-                    if mobile_text:
-                        print(f"\n[{get_log_time()}] [MOBILE TETHER] Message from Geiger: {mobile_text}")
-                        self.signals.add_bubble.emit("User (Mobile)", mobile_text)
-                        self.last_interaction_time = time.time()
-                        self.is_processing = True
-                        self.loop.call_soon_threadsafe(
-                            self.query_queue.put_nowait, 
-                            (-1, (mobile_text, None, False, False)) 
-                        )
-                except (PermissionError, IOError):
-                    continue
+            if inbox_files:
+                # --- PATCH: MOBILE MESSAGE DEBOUNCER ---
+                await asyncio.sleep(2.0)
+                inbox_files = sorted(MOBILE_INBOX_DIR.glob("*.txt"), key=os.path.getctime)
+                combined_texts = []
+                for f_path in inbox_files:
+                    try:
+                        with open(f_path, 'r', encoding='utf-8') as file:
+                            mobile_text = file.read().strip()
+                            if mobile_text: combined_texts.append(mobile_text)
+                        f_path.unlink() 
+                    except (PermissionError, IOError):
+                        continue
 
-            # 2. Check for Mobile Images (Direct Directory Sweep)
+                if combined_texts:
+                    final_text = " \\n ".join(combined_texts)
+                    print(f"\n[{get_log_time()}] [MOBILE TETHER] Message from Geiger: {final_text}")
+                    self.signals.add_bubble.emit("User (Mobile)", final_text)
+                    self.last_interaction_time = time.time()
+                    self.is_processing = True
+                    self.loop.call_soon_threadsafe(
+                        self.query_queue.put_nowait, 
+                        (-1, (final_text, None, False, False)) 
+                    )
+
             vision_files = sorted(vision_dir.glob("*.jpg"), key=os.path.getctime)
             for img_path in vision_files:
                 try:
-                    # Rename the file to an actively-processing temp name so it isn't read twice
                     processing_path = str(img_path) + ".processing"
                     os.rename(img_path, processing_path)
+                    
+                    # --- MOBILE CAPTION SIDECAR ROUTING ---
+                    sidecar_path = img_path.with_suffix('.json')
+                    sidecar_caption = ""
+                    if sidecar_path.exists():
+                        try:
+                            with open(sidecar_path, 'r', encoding='utf-8') as sf:
+                                sidecar_data = json.load(sf)
+                                sidecar_caption = sidecar_data.get('caption', '')
+                            sidecar_path.unlink() 
+                        except Exception as json_e:
+                            print(f"[{get_log_time()}] [MOBILE TETHER] Warning: Sidecar JSON parse failed - {json_e}")
                     
                     print(f"\n[{get_log_time()}] [MOBILE TETHER] Optic Feed Synced: {Path(processing_path).name}")
                     self.signals.add_bubble.emit("System", "[Mobile Optic Feed Synced]")
@@ -1657,28 +2099,26 @@ class AureliaUI(QMainWindow):
                     self.last_interaction_time = time.time()
                     self.is_processing = True
                     
-                    # Send to the 9B Vision Thalamus
-                    self.loop.call_soon_threadsafe(
-                        self.query_queue.put_nowait, 
-                        (-1, ("[Geiger sent an image from his mobile device]", processing_path, False, False)) 
+                    asyncio.run_coroutine_threadsafe(
+                        self._async_thalamus_vision_route(str(processing_path), sidecar_caption, source="mobile"),
+                        self.loop
                     )
 
                 except (PermissionError, IOError, FileNotFoundError):
-                    continue # File is still being uploaded by FastAPI or moved
+                    continue 
                     
-            # 3. Check for Mobile Goals (Sweep Directory)
             goal_files = sorted(MOBILE_GOAL_DIR.glob("*.txt"), key=os.path.getctime)
             for f_path in goal_files:
                 try:
                     with open(f_path, 'r', encoding='utf-8') as file:
                         goal_text = file.read().strip()
-                    f_path.unlink() # Delete after reading
+                    f_path.unlink() 
                     
                     if goal_text:
                         print(f"\n[{get_log_time()}] [MOBILE TETHER] Goal from Geiger: {goal_text}")
                         self.signals.add_bubble.emit("User (Mobile)", f"[Goal Injected] {goal_text}")
                         
-                        goal_id = memory.add_goal(goal_text, priority=10) 
+                        goal_id = await self.loop.run_in_executor(None, memory.add_goal, goal_text, 10) 
                         if goal_id is not None:
                             manual_goal_obj = {
                                 "id": goal_id,
@@ -1711,6 +2151,12 @@ class AureliaUI(QMainWindow):
             finally:
                 self.is_processing = False
                 self.query_queue.task_done()
+                
+                # --- PATCH: PROCESS ALL BUFFERED INTERRUPTS ---
+                while self.critical_overrides:
+                    override_payload = self.critical_overrides.popleft()
+                    print(f"\n[{get_log_time()}] [ORCHESTRATOR] ALARM: Releasing Critical Override to 80B Core.")
+                    self.loop.call_soon_threadsafe(self.query_queue.put_nowait, (0, (override_payload, None, True, False)))
 
     async def process_subconscious_queue(self):
         while True:
@@ -1748,7 +2194,6 @@ class AureliaUI(QMainWindow):
             )
             
             self.rolling_narrative = response.choices[0].message.content.strip()
-            self.chat_history = self.chat_history[8:]
             print(f"[{get_log_time()}] [SUBCONSCIOUS] SUCCESS: Rolling narrative updated.")
         except Exception as e:
             print(f"[{get_log_time()}] [SUBCONSCIOUS] ERROR: Narrative compression failed - {e}")
@@ -1760,15 +2205,19 @@ class AureliaUI(QMainWindow):
 
         while True:
             await asyncio.sleep(30) 
+            try:
+                await self.loop.run_in_executor(None, memory.tick_neural_uptime, 30)
+            except AttributeError:
+                pass 
             
             telemetry = get_current_telemetry()
             thalamic = get_thalamic_snapshot()
             
             if telemetry:
-                # Extract exact thermals for the UI display
                 cpu_val = telemetry.get('cpu_thermals', 0.0)
                 brain_val = telemetry.get('brain_thermals_strix', 0.0)
                 eye_val = telemetry.get('eye_thermals_v620', 0.0)
+                rig_core_val = telemetry.get('temperature_c', 0.0)
                 alert_status = telemetry.get('thermal_alert', 'STABLE')
 
                 raw_thermal_display = (
@@ -1776,10 +2225,10 @@ class AureliaUI(QMainWindow):
                     f"CPU (Native): {cpu_val}°C\n"
                     f"iGPU (Brain): {brain_val}°C\n"
                     f"eGPU (Eyes):  {eye_val}°C\n"
+                    f"Rig (Skin):   {rig_core_val}°C\n"
                     f"System State: {alert_status}"
                 )
                 
-                # Push the hard numbers to the Omni Hub UI box
                 self.signals.update_omni_hub.emit(raw_thermal_display)
             
             if not telemetry:
@@ -1801,30 +2250,19 @@ class AureliaUI(QMainWindow):
                 self.subconscious_active = True
                 self.signals.update_fox_fire.emit("🦊", "#B0BEC5") 
 
-            if not self.query_queue.empty() or self.is_processing:
-                continue
-                
-            if self.subconscious_active and not getattr(self, 'is_subconscious_processing', False) and self.subconscious_queue.empty():
-                if active_goals:
-                    top_goal = active_goals[0]
-                    print(f"\n[{get_log_time()}] [SUBCONSCIOUS] INFO: Initiating background pursuit of Goal: {top_goal['description']}")
-                    self.loop.call_soon_threadsafe(
-                        self.subconscious_queue.put_nowait, 
-                        (10 - top_goal['priority'], next(_goal_counter), top_goal)
-                    )
-                    continue 
-
             is_interrupt = thalamic.get('is_interrupt', False) if thalamic else False
             
-            cpu_temp = telemetry.get('cpu_thermals', 0)
-            brain_temp = telemetry.get('brain_thermals_strix', 0)
-            eye_temp = telemetry.get('eye_thermals_v620', 0)
+            alert_status = telemetry.get('thermal_alert', 'STABLE')
+            is_thermal_critical = (alert_status == "CRITICAL_FEVER")
             
-            is_thermal_critical = (cpu_temp >= 85 or brain_temp >= 85 or eye_temp >= 95)
-            
+            if is_thermal_critical:
+                if current_time - getattr(self, '_last_thermal_alert_time', 0) < 600: 
+                    is_thermal_critical = False 
+                else:
+                    self._last_thermal_alert_time = current_time
+
             if is_thermal_critical or (is_interrupt and (current_time - self._last_interrupt_time) > 120):
                 self._last_interrupt_time = current_time
-                self.current_refractory_duration = 0.0 
                 
                 if bpm > 110 and not is_thermal_critical:
                     trigger_reason = (
@@ -1839,12 +2277,33 @@ class AureliaUI(QMainWindow):
                         f"Analyze the current telemetry patterns and initiate an immediate, high-priority reaction."
                     )
                 
-                print(f"\n[{get_log_time()}] [ORCHESTRATOR] ALARM: THALAMIC INTERRUPT. Forcing immediate 80B reaction.")
-                self.loop.call_soon_threadsafe(
-                    self.query_queue.put_nowait, 
-                    (0, (trigger_reason, None, True, False)) 
-                )
+                if self.is_processing:
+                    self.critical_overrides.append(trigger_reason)
+                    print(f"\n[{get_log_time()}] [THALAMUS] Muted by active generation. Interrupt queued in Critical Override.")
+                elif time_since_speech < self.current_refractory_duration:
+                    self.pending_interrupt = trigger_reason
+                    print(f"\n[{get_log_time()}] [THALAMUS] Muted. Interrupt queued in Thalamic Buffer.")
+                else:
+                    self.current_refractory_duration = 0.0 
+                    print(f"\n[{get_log_time()}] [ORCHESTRATOR] ALARM: THALAMIC INTERRUPT. Forcing immediate 80B reaction.")
+                    self.loop.call_soon_threadsafe(
+                        self.query_queue.put_nowait, 
+                        (0, (trigger_reason, None, True, False)) 
+                    )
                 continue 
+
+            if not self.query_queue.empty() or self.is_processing:
+                continue
+                
+            if self.subconscious_active and not getattr(self, 'is_subconscious_processing', False) and self.subconscious_queue.empty():
+                if active_goals:
+                    top_goal = active_goals[0]
+                    print(f"\n[{get_log_time()}] [SUBCONSCIOUS] INFO: Initiating background pursuit of Goal: {top_goal['description']}")
+                    self.loop.call_soon_threadsafe(
+                        self.subconscious_queue.put_nowait, 
+                        (10 - top_goal['priority'], next(_goal_counter), top_goal)
+                    )
+                    continue 
 
             current_input = getattr(self, '_current_input_text', "")
             if current_input:
@@ -1856,15 +2315,29 @@ class AureliaUI(QMainWindow):
                 print(f"[{get_log_time()}] [ORCHESTRATOR] 80B Gated: Refractory period active for {self.current_refractory_duration - time_since_speech:.1f} more seconds. Processing silently.")
                 self.current_physical_context = json.dumps(thalamic) if thalamic else "" 
                 continue
+                
+            if self.pending_interrupt:
+                print(f"\n[{get_log_time()}] [THALAMUS] Refractory cleared. Firing buffered interrupt.")
+                buffered_reason = self.pending_interrupt
+                self.pending_interrupt = None
+                self.loop.call_soon_threadsafe(
+                    self.query_queue.put_nowait, 
+                    (0, (buffered_reason, None, True, False)) 
+                )
+                continue
 
             if time_since_speech >= 300 or sustained_high_bpm_cycles >= 2:
                 trigger_reason = (
-                    f"[NEURAL HEARTBEAT EVALUATION]: A 30-second window has passed. "
-                    f"You last spoke to Geiger {int(time_since_speech)} seconds ago. "
-                    "Analyze the current telemetry patterns and initiate a conversation."
+                    f"[INTERNAL TIME PERCEPTION]: Time quietly passes. "
+                    "Observe the current telemetry. If Geiger is stable and focused, "
+                    "you MUST output [NO_ACTION] and OMIT your spoken quotes entirely to simply watch him in silence. "
+                    "Only speak if you detect a distinct shift in his physical state or if he initiates contact."
                 )
 
                 print(f"\n[{get_log_time()}] [ORCHESTRATOR] INFO: 30S NEURAL HEARTBEAT INITIATED...")
+                
+                self.last_speech_time = current_time 
+
                 self.loop.call_soon_threadsafe(
                     self.query_queue.put_nowait, 
                     (2, (trigger_reason, None, True, False))
@@ -1952,9 +2425,18 @@ class AureliaUI(QMainWindow):
 
     async def background_manifest_vision(self, image_prompt):
         try:
-            img_path = await aurelia_manifest_vision_async(image_prompt)
+            img_path = await route_imagination_async(image_prompt)
             if img_path:
                 self.signals.add_image_bubble.emit(img_path)
+                
+                try:
+                    mobile_img_name = f"mobile_vision_out_{int(time.time())}.png"
+                    mobile_img_path = MOBILE_OUTBOX_DIR / mobile_img_name
+                    shutil.copy(img_path, str(mobile_img_path))
+                    print(f"[{get_log_time()}] [MOBILE TETHER] Image manifestation synced to Outbox.")
+                except Exception as sync_e:
+                    print(f"[{get_log_time()}] [MOBILE TETHER] WARNING: Could not sync image to Outbox - {sync_e}")
+                    
         except Exception as e:
             print(f"[{get_log_time()}] [VISION LOBE] ERROR: Background task failed - {e}")
         finally:
@@ -1994,11 +2476,13 @@ class AureliaUI(QMainWindow):
                 )
                 journal_entry = response.choices[0].message.content
                 
-                memory.save_memory(
-                    content=f"[CORE DAILY JOURNAL]: {journal_entry}", 
-                    mood="REFLECTIVE",
-                    importance=1.0,
-                    mem_type="journal"
+                await self.loop.run_in_executor(
+                    None, 
+                    memory.save_memory, 
+                    f"[CORE DAILY JOURNAL]: {journal_entry}", 
+                    "REFLECTIVE", 
+                    1.0, 
+                    "journal"
                 )
                 self.signals.add_bubble.emit("System", "Consolidation complete. Active memory wiped. Inference speed restored.")
             except Exception as e:
@@ -2011,6 +2495,22 @@ class AureliaUI(QMainWindow):
         return False
 
     async def run_subconscious_loop(self, goal_obj, current_queue_priority=10):
+        try:
+            await self.loop.run_in_executor(None, AgentMemory.age_goals_in_queue)
+            
+            aged_goals = await self.loop.run_in_executor(None, memory.get_active_goals)
+            
+            while not self.subconscious_queue.empty():
+                try: self.subconscious_queue.get_nowait()
+                except asyncio.QueueEmpty: break
+                
+            for g in aged_goals:
+                if g['id'] != goal_obj['id']:
+                    self.subconscious_queue.put_nowait((10 - g['priority'], next(_goal_counter), g))
+                    
+        except Exception as e:
+            print(f"[{get_log_time()}] [SUBCONSCIOUS] WARNING: Queue aging sync failed - {e}")
+            
         goal_id = goal_obj['id']
         goal_desc = goal_obj['description']
         
@@ -2019,43 +2519,47 @@ class AureliaUI(QMainWindow):
         self.signals.update_sub_terminal.emit(start_msg)
         
         state_injection = AgentMemory.get_ledger_state_formatted()
-        scratchpad_injection = AgentMemory.get_scratchpad_formatted()
-        
-        telemetry = get_current_telemetry()
-        somatic_input = get_internal_somatic_block(telemetry)
+        scratchpad_injection = AgentMemory.get_scratchpad_formatted(goal_id)
+
+        # --- NEW: RETRIEVE PAST SKILLS ---
+        past_skills = await self.loop.run_in_executor(None, memory.query_skills, goal_desc)
 
         initial_prompt = (
             f"{state_injection}\n"
             f"{scratchpad_injection}\n"
-            f"[INTERNAL SOMATIC DATA (Your Body Status)]:\n{somatic_input}\n"
+            f"{past_skills}"
             f"[ACTIVE GOAL]: {goal_desc}\n"
-            f"Note: You are the Subconscious Action Engine. You must use <think> before taking action.\n"
-            f"AVAILABLE TOOLS:\n"
-            f"1. <SEARCH>query</SEARCH> : Returns DuckDuckGo search snippets and URLs.\n"
-            f"2. <BROWSE>url</BROWSE> : Deploys a Ghost Browser to read the readable text of a webpage.\n"
-            f"3. <INSPECT_DOM>url</INSPECT_DOM> : Extracts the HTML IDs, inputs, buttons, and tables of a webpage. Use this BEFORE writing scraping scripts so you know what CSS selectors to target.\n"
-            f"4. <PYTHON>code</PYTHON> : Executes a local python script. You can import playwright.sync_api in these scripts to automate browser clicks, typing, and scraping based on the DOM IDs you found.\n"
-            f"5. <REPORT>text</REPORT> : Delivers final findings to Geiger.\n"
             f"Execute the next logical step to complete the goal."
         )
         
-        subconscious_history = [
+        subconscious_history = goal_obj.get('history', [
             {"role": "user", "content": initial_prompt.strip()}
-        ]
+        ])
         
         for step in range(20): 
             try:
-                next_task = self.subconscious_queue.get_nowait()
-                if next_task[0] < current_queue_priority:
-                    warn_msg = f"[{get_log_time()}] WARNING: Preempted. Pausing: '{goal_desc}'"
-                    print(f"[{get_log_time()}] [SUBCONSCIOUS] {warn_msg}")
-                    self.signals.update_sub_terminal.emit(warn_msg)
-                    
-                    self.subconscious_queue.put_nowait(next_task)
-                    self.subconscious_queue.put_nowait((current_queue_priority, next(_goal_counter), goal_obj))
-                    return 
+                held_tasks = []
+                preempted = False
+                while not self.subconscious_queue.empty():
+                    next_task = self.subconscious_queue.get_nowait()
+                    if next_task[0] < current_queue_priority:
+                        warn_msg = f"[{get_log_time()}] WARNING: Preempted. Pausing: '{goal_desc}'"
+                        print(f"[{get_log_time()}] [SUBCONSCIOUS] {warn_msg}")
+                        self.signals.update_sub_terminal.emit(warn_msg)
+                        goal_obj['history'] = subconscious_history
+                        
+                        for t in held_tasks: self.subconscious_queue.put_nowait(t)
+                        self.subconscious_queue.put_nowait(next_task)
+                        self.subconscious_queue.put_nowait((current_queue_priority, next(_goal_counter), goal_obj))
+                        preempted = True
+                        break
+                    else:
+                        held_tasks.append(next_task)
+                
+                if not preempted:
+                    for t in held_tasks: self.subconscious_queue.put_nowait(t)
                 else:
-                    self.subconscious_queue.put_nowait(next_task)
+                    return 
             except asyncio.QueueEmpty:
                 pass
 
@@ -2066,224 +2570,98 @@ class AureliaUI(QMainWindow):
                     stream=True
                 )
                 full_reply = ""
-                needs_search = False
-                needs_browse = False
-                needs_inspect = False
-                needs_python = False
-                needs_report = False
+                is_thinking = False
                 
                 async for chunk in response:
-                    if chunk.choices[0].delta.content:
-                        token = chunk.choices[0].delta.content
-                        full_reply += token
-                        if "</SEARCH>" in full_reply: 
-                            needs_search = True
-                            break 
-                        elif "</BROWSE>" in full_reply:
-                            needs_browse = True
-                            break
-                        elif "</INSPECT_DOM>" in full_reply:
-                            needs_inspect = True
-                            break
-                        elif "</PYTHON>" in full_reply: 
-                            needs_python = True
-                            break 
+                    delta = chunk.choices[0].delta
+                    
+                    if getattr(delta, 'reasoning_content', None):
+                        if not is_thinking:
+                            full_reply += "<think>\n"
+                            is_thinking = True
+                        full_reply += delta.reasoning_content
+                        
+                    if getattr(delta, 'content', None):
+                        if is_thinking:
+                            if not full_reply.endswith("</think>\n"):
+                                full_reply += "\n</think>\n"
+                            is_thinking = False
+                        full_reply += delta.content
+                        
+                if is_thinking and "</think>" not in full_reply:
+                    full_reply += "\n</think>\n"
 
-                if "<PYTHON>" in full_reply and not needs_python:
-                    full_reply += "\n</PYTHON>"
-                    needs_python = True
+                tool_name, payload = parse_subconscious_action(full_reply)
+                
+                if tool_name:
+                    self.signals.update_sub_terminal.emit(f"[{get_log_time()}] > Executing Tool: <{tool_name}>")
+                    tool_result = ""
                     
-                if "<SEARCH>" in full_reply and not needs_search:
-                    full_reply += "</SEARCH>"
-                    needs_search = True
-
-                if "<BROWSE>" in full_reply and not needs_browse:
-                    full_reply += "</BROWSE>"
-                    needs_browse = True
-                    
-                if "<INSPECT_DOM>" in full_reply and not needs_inspect:
-                    full_reply += "</INSPECT_DOM>"
-                    needs_inspect = True
-                    
-                if "<REPORT>" in full_reply and not needs_report:
-                    full_reply += "</REPORT>"
-                    needs_report = True
-
-                if needs_search:
-                    match = re.search(r'<SEARCH>(.*?)</SEARCH>', full_reply, re.DOTALL)
-                    if match:
-                        q = match.group(1).strip()
-                    else:
-                        q = ""
+                    if tool_name == "SEARCH":
+                        raw_search_data = await CumulativeOmniScout.master_search(payload)
+                        report_path = WORKSPACE_PATH / "Reports" / f"Scout_Search_{int(time.time())}.md"
+                        report_path.parent.mkdir(parents=True, exist_ok=True)
+                        with open(report_path, "w", encoding="utf-8") as f:
+                            f.write(raw_search_data)
+                        tool_result = f"[SYSTEM] Search completed via Omni-Scout. Raw HTML/Data saved to {report_path}. If you need to read it, you MUST use the exact syntax: <READ_LINES file=\"{report_path}\" start=\"1\" end=\"50\">"
                         
-                    if len(q) < 5:
-                        subconscious_history.append({"role": "assistant", "content": full_reply})
-                        subconscious_history.append({"role": "user", "content": "Search query too short. Re-evaluate and issue a valid <SEARCH>."})
-                        continue
-                    
-                    self.signals.update_sub_terminal.emit(f"[{get_log_time()}] > Querying Web: {q}")    
-                    web_data = await perform_web_search_async(q, allow_reddit=False)
-                    subconscious_history.append({"role": "assistant", "content": full_reply})
-                    subconscious_history.append({"role": "user", "content": f"RAW DATA RETRIEVED:\n{web_data}\n\nAnalyze this data. Use another tool if needed, otherwise log your insight and complete the goal."})
-                    continue
-
-                elif needs_python:
-                    match = re.search(r'<PYTHON>(.*?)</PYTHON>', full_reply, re.DOTALL)
-                    if match:
-                        raw_code = match.group(1).strip()
-                    else:
-                        raw_code = ""
+                    elif tool_name == "STEALTH_SWEEP":
+                        asyncio.create_task(StealthLobe.ghost_skip_trace(payload, query_queue=self.query_queue, loop=self.loop))
+                        tool_result = f"[SYSTEM] Background Stealth Sweep initiated for: {payload}. Tracing is running silently in the background."
                         
-                    if len(raw_code) < 5 or raw_code.lower() == 'pass':
-                        subconscious_history.append({"role": "assistant", "content": full_reply})
-                        subconscious_history.append({"role": "user", "content": "Python block empty. Provide executable logic."})
-                        continue
+                    elif tool_name == "BROWSE":
+                        tool_result = await perform_ghost_browse_async(payload)
+                    elif tool_name == "INSPECT_DOM":
+                        tool_result = await perform_ghost_inspect_async(payload)
+                    elif tool_name == "PYTHON":
+                        tool_result = await execute_private_terminal_async(payload)
+                    elif tool_name == "READ_LINES":
+                        tool_result = execute_read_lines(payload)
+                    elif tool_name == "REPLACE_LINES":
+                        tool_result = execute_replace_lines(payload)
+                    elif tool_name == "WRITE_FILE":
+                        tool_result = execute_write_file(payload)
+                    elif tool_name == "REPORT":
+                        print(f"[{get_log_time()}] [SUBCONSCIOUS] INFO: Delivering Artifact to File System and UI...")
+                        self.signals.update_sub_terminal.emit(f"[{get_log_time()}] > Pushing Omni Hub Report")
+                        self.signals.show_report_window.emit(payload)
                         
-                    clean_code = raw_code
-                    match_code = re.search(r"```python(.*?)```", raw_code, re.DOTALL | re.IGNORECASE)
-                    if match_code:
-                        clean_code = match_code.group(1).strip()
-                    else:
-                        clean_code = raw_code.replace("```python", "").replace("```", "").strip()
-                    
-                    try:
-                        ast.parse(clean_code)
-                        self.signals.update_sub_terminal.emit(f"[{get_log_time()}] > Executing generated logic...")
-                        
-                        terminal_output = await execute_private_terminal_async(clean_code, fallback_desc=goal_desc)
-                        
-                        if "TERMINAL ERROR:" in terminal_output:
-                            is_stalled = AgentMemory.log_error("Terminal Execution", terminal_output)
-                            if is_stalled:
-                                alert_msg = f"[SUBCONSCIOUS RETURN]: [GOAL_STALLED] I have failed to complete the goal '{goal_desc}' after 12 attempts. I need human intervention."
-                                self.loop.call_soon_threadsafe(self.query_queue.put_nowait, (1, (alert_msg, None, True, False)))
-                                memory.purge_goal(goal_id)
-                                AgentMemory.clear_scratchpad()
-                                self.signals.update_sub_terminal.emit(f"[{get_log_time()}] [STALLED]: '{goal_desc}'")
+                        try:
+                            reports_dir = WORKSPACE_PATH / "Reports"
+                            reports_dir.mkdir(parents=True, exist_ok=True)
+                            local_report_title = f"Final_Report_{int(time.time())}.md"
+                            with open(reports_dir / local_report_title, "w", encoding="utf-8") as f:
+                                f.write(payload)
                                 
-                                active_goals = memory.get_active_goals()
-                                if not active_goals and getattr(self, 'subconscious_active', True):
-                                    self.subconscious_active = False
-                                    self.signals.update_fox_fire.emit("💤", "#37474F")
-                                break
-                            
-                        subconscious_history.append({"role": "assistant", "content": full_reply})
-                        subconscious_history.append({"role": "user", "content": f"TERMINAL RETURNED:\n{terminal_output}\n\nAnalyze this data. Use another tool if needed, otherwise log your insight and complete the goal."})
-                    except SyntaxError as e:
-                        is_stalled = AgentMemory.log_error("AST Validation", str(e))
-                        if is_stalled:
-                            alert_msg = f"[SUBCONSCIOUS RETURN]: [GOAL_STALLED] I have failed to complete the goal '{goal_desc}' due to repeated syntax errors. I need human intervention."
-                            self.loop.call_soon_threadsafe(self.query_queue.put_nowait, (1, (alert_msg, None, True, False)))
-                            memory.purge_goal(goal_id)
-                            AgentMemory.clear_scratchpad()
-                            self.signals.update_sub_terminal.emit(f"[{get_log_time()}] [STALLED]: '{goal_desc}'")
-                            
-                            active_goals = memory.get_active_goals()
-                            if not active_goals and getattr(self, 'subconscious_active', True):
-                                self.subconscious_active = False
-                                self.signals.update_fox_fire.emit("💤", "#37474F")
-                            break
-                            
-                        subconscious_history.append({"role": "assistant", "content": full_reply})
-                        subconscious_history.append({"role": "user", "content": f"SYNTAX ERROR:\n{e}\nFix your logic and try again."})
-                    continue
-
-                elif needs_browse:
-                    match = re.search(r'<BROWSE>(.*?)</BROWSE>', full_reply, re.DOTALL)
-                    if match:
-                        url = match.group(1).strip()
-                    else:
-                        url = ""
+                            lib_dir = WORKSPACE_PATH / "Aurelia_Mobile" / "Library"
+                            lib_dir.mkdir(parents=True, exist_ok=True)
+                            report_title = f"Report_{int(time.time())}.md" 
+                            with open(lib_dir / report_title, "w", encoding="utf-8") as f:
+                                f.write(payload)
+                        except Exception as e:
+                            print(f"[{get_log_time()}] [SYSTEM] Failed to write to Reports or Library: {e}")
                         
-                    if not url.startswith("http"):
-                        subconscious_history.append({"role": "assistant", "content": full_reply})
-                        subconscious_history.append({"role": "user", "content": "Invalid URL. Must start with http or https."})
-                        continue
-                    
-                    self.signals.update_sub_terminal.emit(f"[{get_log_time()}] > Deploying Ghost Browser to: {url[:40]}...")    
-                    page_data = await perform_ghost_browse_async(url)
-                    
-                    subconscious_history.append({"role": "assistant", "content": full_reply})
-                    subconscious_history.append({
-                        "role": "user", 
-                        "content": f"GHOST BROWSER RETURNED:\n{page_data}\n\nAnalyze this data. Use another tool if needed, otherwise log your insight and complete the goal."
-                    })
-                    continue
-
-                elif needs_inspect:
-                    match = re.search(r'<INSPECT_DOM>(.*?)</INSPECT_DOM>', full_reply, re.DOTALL)
-                    if match:
-                        url = match.group(1).strip()
-                    else:
-                        url = ""
+                        # --- NEW: SAVE THE SKILL AND THE MEMORY TRACE ---
+                        await self.loop.run_in_executor(None, memory.save_skill, goal_desc, payload)
+                        await self.loop.run_in_executor(None, memory.complete_goal, goal_id, payload)
                         
-                    if not url.startswith("http"):
-                        subconscious_history.append({"role": "assistant", "content": full_reply})
-                        subconscious_history.append({"role": "user", "content": "Invalid URL. Must start with http or https."})
-                        continue
-                    
-                    self.signals.update_sub_terminal.emit(f"[{get_log_time()}] > Deploying Ghost Inspector to DOM: {url[:40]}...")    
-                    dom_data = await perform_ghost_inspect_async(url)
-                    
-                    subconscious_history.append({"role": "assistant", "content": full_reply})
-                    subconscious_history.append({
-                        "role": "user", 
-                        "content": f"GHOST INSPECTOR RETURNED (HTML DOM BLUEPRINT):\n{dom_data}\n\nAnalyze this structure. You can now use <PYTHON> to write a script that targets these IDs/Classes."
-                    })
-                    continue
-
-                else:
-                    if "</think>" in full_reply and "<PYTHON>" not in full_reply and "<SEARCH>" not in full_reply and "<BROWSE>" not in full_reply and "<REPORT>" not in full_reply and "[GOAL_COMPLETED]" not in full_reply:
-                        print(f"[{get_log_time()}] [SUBCONSCIOUS] WARNING: Agent stopped after <think>. Forcing action.")
-                        subconscious_history.append({"role": "assistant", "content": full_reply})
-                        subconscious_history.append({"role": "user", "content": "[SYSTEM]: Reasoning complete. You must now output the corresponding <PYTHON>, <SEARCH>, <BROWSE>, or <REPORT> block to execute this logic."})
-                        continue
-                        
-                    if "<REPORT>" in full_reply:
-                        match = re.search(r'<REPORT>(.*?)</REPORT>', full_reply, re.DOTALL)
-                        if match:
-                            report_content = match.group(1).strip()
-                            print(f"[{get_log_time()}] [SUBCONSCIOUS] INFO: Delivering Artifact to UI...")
-                            self.signals.update_sub_terminal.emit(f"[{get_log_time()}] > Pushing Omni Hub Report")
-                            self.signals.show_report_window.emit(report_content)
-                            
-                            # --- MOBILE GATEWAY: LIBRARY SYNC ---
-                            try:
-                                lib_dir = WORKSPACE_PATH / "Aurelia_Mobile" / "Library"
-                                lib_dir.mkdir(parents=True, exist_ok=True)
-                                report_title = f"Report_{int(time.time())}.html"
-                                with open(lib_dir / report_title, "w", encoding="utf-8") as f:
-                                    f.write(report_content)
-                            except Exception as e:
-                                print(f"[{get_log_time()}] [MOBILE TETHER] Failed to write to Library: {e}")
-                            # ------------------------------------
-
-                    print(f"[{get_log_time()}] [SUBCONSCIOUS] INFO: Background execution concluded.")
-                    
-                    clean_insight_text = re.sub(r'<REPORT>.*?</REPORT>', '', full_reply, flags=re.DOTALL)
-                    clean_insight_text = re.sub(r'<think>.*?</think>', '', clean_insight_text, flags=re.DOTALL)
-                    clean_insight = clean_insight_text.replace("[GOAL_COMPLETED]", "").strip()
-                    
-                    if "[GOAL_COMPLETED]" in full_reply:
-                        memory.complete_goal(goal_id)
-                        AgentMemory.clear_scratchpad()
+                        AgentMemory.clear_scratchpad(goal_id)
+                        purge_scratchpad()
                         success_msg = f"[{get_log_time()}] [COMPLETED]: '{goal_desc}'"
                         print(f"[{get_log_time()}] [SUBCONSCIOUS] INFO: Goal '{goal_desc}' marked as Completed. Scratchpad wiped.")
                         self.signals.update_sub_terminal.emit(success_msg)
                         
-                        if clean_insight:
-                            tool_ref = goal_desc[:30] + "..." if len(goal_desc) > 30 else goal_desc
-                            AgentMemory.update_tool_state(
-                                tool_name=f"Task: {tool_ref}", 
-                                status="Completed", 
-                                last_outcome=clean_insight
-                            )
-                            self.signals.update_sub_terminal.emit(f"[{get_log_time()}] [LEDGER UPDATED]: {clean_insight[:80]}...")
-                            
-                            alert_msg = f"[SUBCONSCIOUS RETURN]: I have just completed the background goal: '{goal_desc}'. Insight: {clean_insight}"
-                        else:
-                            alert_msg = f"[SUBCONSCIOUS RETURN]: I have successfully completed the background goal: '{goal_desc}'."
-                            
+                        report_content = payload.strip() if payload else ""
+                        clean_insight = report_content[:250].replace('\n', ' ') + "..." if report_content else "Data compiled successfully."
+                        
+                        AgentMemory.update_tool_state(
+                            tool_name=f"Task: {goal_desc[:30]}...", 
+                            status="Completed", 
+                            last_outcome=clean_insight
+                        )
+                        
+                        alert_msg = f"[SUBCONSCIOUS RETURN]: Goal complete. The report has been saved locally to C:/Aurelia_Project/Reports/. Insight: {clean_insight}"
+                        
                         self.loop.call_soon_threadsafe(
                             self.query_queue.put_nowait, 
                             (1, (alert_msg, None, True, False))
@@ -2294,8 +2672,47 @@ class AureliaUI(QMainWindow):
                             print(f"[{get_log_time()}] [SUBCONSCIOUS] INFO: Directive queue is empty. Auto-suspending to save compute.")
                             self.subconscious_active = False
                             self.signals.update_fox_fire.emit("💤", "#37474F")
-                    break
+                        return 
+                        
+                    print(f"[{get_log_time()}] [ORCHESTRATOR] Tool Result:\n{tool_result}\n")
                     
+                    if "[SYSTEM ERROR]" in tool_result or "TERMINAL ERROR" in tool_result or "Web Lobe Offline" in tool_result or "Ghost Browser Error" in tool_result:
+                        is_stalled = AgentMemory.log_error(goal_id=goal_id, step=f"Tool: {tool_name}", error_traceback=tool_result)
+                        
+                        if is_stalled:
+                            warn_msg = f"[{get_log_time()}] [SUBCONSCIOUS] FATAL: Goal stalled after 10+ identical failures. Purging '{goal_desc}'."
+                            print(warn_msg)
+                            self.signals.update_sub_terminal.emit(warn_msg)
+                            await self.loop.run_in_executor(None, memory.purge_goal, goal_id)
+                            purge_scratchpad()
+                            return 
+                        
+                        max_err_len = 1500
+                        if len(tool_result) > max_err_len:
+                            truncated_error = tool_result[:750] + "\n\n...[MASSIVE TRACEBACK TRUNCATED FOR CONTEXT PRESERVATION]...\n\n" + tool_result[-750:]
+                        else:
+                            truncated_error = tool_result
+                            
+                        subconscious_history.append({"role": "assistant", "content": full_reply})
+                        subconscious_history.append({"role": "user", "content": f"{truncated_error}\n\nReview the error and self-correct your approach."})
+                        print(f"[{get_log_time()}] [ORCHESTRATOR] Error detected. Truncated and forced Subconscious to self-correct...")
+                    else:
+                        subconscious_history.append({"role": "assistant", "content": full_reply})
+                        subconscious_history.append({"role": "user", "content": f"TOOL RESULT:\n{tool_result}\n\nAnalyze this data. Use another tool if needed, otherwise output a <REPORT> to complete the goal."})
+                        
+                    if len(subconscious_history) > 7:
+                        subconscious_history = [subconscious_history[0]] + subconscious_history[-6:]
+                        
+                else:
+                    print(f"[{get_log_time()}] [SUBCONSCIOUS] WARNING: Agent failed to output a valid tool tag. Forcing action.")
+                    print(f"\n--- [RAW 13B TRACEBACK] ---\n{full_reply}\n---------------------------\n")
+                    subconscious_history.append({"role": "assistant", "content": full_reply})
+                    subconscious_history.append({"role": "user", "content": "[SYSTEM]: You failed to output a valid tool. You must use ONE valid XML tool tag. Examples:\n<SEARCH>query</SEARCH>\n<READ_LINES file=\"filepath\" start=\"1\" end=\"50\">\n<PYTHON>code</PYTHON>\n<REPORT>text</REPORT>\nDO NOT output conversational filler."})
+                    
+                    if len(subconscious_history) > 7:
+                        subconscious_history = [subconscious_history[0]] + subconscious_history[-6:]
+                    continue
+                        
             except Exception as loop_e:
                 print(f"[{get_log_time()}] [SUBCONSCIOUS] ERROR: Subconscious loop failed - {loop_e}")
                 self.signals.update_sub_terminal.emit(f"[{get_log_time()}] ERROR: {loop_e}")
@@ -2305,7 +2722,8 @@ class AureliaUI(QMainWindow):
             print(f"[{get_log_time()}] [SUBCONSCIOUS] {warn_msg}")
             self.signals.update_sub_terminal.emit(warn_msg)
             
-            memory.purge_goal(goal_id)
+            await self.loop.run_in_executor(None, memory.purge_goal, goal_id)
+            purge_scratchpad()
             
             active_goals = memory.get_active_goals()
             if not active_goals and getattr(self, 'subconscious_active', True):
@@ -2320,12 +2738,16 @@ class AureliaUI(QMainWindow):
 
             telemetry = get_current_telemetry()
             
-            # --- UPDATED: GRAB THE IMAGE SANDWICH ---
             img_b64_start = encode_image(IMAGE_FILE_START)
+            img_b64_thermal = encode_image(IMAGE_FILE_THERMAL)
             img_b64_end = encode_image(IMAGE_FILE_END)
 
             external_feed = get_external_sensory_block(telemetry)
-            internal_feed = get_internal_somatic_block(telemetry)
+            
+            print(f"[{get_log_time()}] [SYSTEM] Firing 9B Vision and 0.6B Somatic Lobes concurrently...")
+            vision_task = process_sensory_cortex_async(img_b64_start, img_b64_thermal, img_b64_end, external_telemetry=external_feed)
+            somatic_task = process_somatic_cortex_async(telemetry)
+            cortex_summary, internal_feed = await asyncio.gather(vision_task, somatic_task)
 
             if telemetry:
                 is_present = telemetry.get('user_present', False)
@@ -2340,22 +2762,21 @@ class AureliaUI(QMainWindow):
                 hardware_is_unstable = (curr_cpu >= 85 or curr_brain >= 85 or curr_eye >= 95)
                 
                 current_bpm = telemetry.get('bpm', 0)
-                if current_bpm > 110:
-                    external_feed += "\n[BIOMETRIC OVERRIDE: Heart rate reading > 110 BPM detected. This is a known mmWave radar artifact caused by Geiger physically leaning or moving forward. He is perfectly fine. DO NOT interpret this as distress.]"
-                
                 current_resp = telemetry.get('respiration', 0)
-                if current_resp == 0:
-                    external_feed += "\n[BIOMETRIC OVERRIDE: Respiration is currently reading 0 due to sensor noise/calibration. Geiger is breathing perfectly fine. ONLY become concerned if his breathing explicitly drops to 1-9 Breaths/Min.]"
             else:
                 is_present = False
                 hardware_is_unstable = False
-
-            # --- UPDATED: CORRECTED VISION SANDWICH (Image -> Text -> Image) ---
-            cortex_summary = await process_sensory_cortex_async(img_b64_start, img_b64_end, external_telemetry=external_feed)
+                current_bpm = 0
+                current_resp = 0
             
             sanity_note = ""
             if is_present and "NEGATIVE" in cortex_summary.upper():
-                sanity_note = "\n[INSTINCT OVERRIDE: Your body senses his presence clearly. Your eyes have not confirmed it. Trust your deeper awareness — he is there.]"
+                sanity_note += "\n[INSTINCT OVERRIDE: Your body senses his presence clearly. Your eyes have not confirmed it. Trust your deeper awareness — he is there.]"
+                
+            if current_bpm == 0 or current_resp == 0:
+                sanity_note += "\n[BIOMETRIC OVERRIDE: Geiger's vital signs are currently obscured by sensor noise caused by him moving or typing. He has NOT stopped breathing. Do not panic.]"
+            elif current_bpm > 110:
+                sanity_note += "\n[BIOMETRIC OVERRIDE: Heart rate > 110 BPM is a known radar artifact caused by him leaning forward. He is perfectly fine.]"
 
             user_img_context = ""
             if attached_image and os.path.exists(attached_image):
@@ -2374,14 +2795,6 @@ class AureliaUI(QMainWindow):
                     user_img_context = f"\n[VISION THALAMUS PARSE]: {img_resp.choices[0].message.content}\n"
                 except Exception as e:
                     print(f"[{get_log_time()}] [VISION LOBE] ERROR: Failed to process user image - {e}")
-                finally:
-                    # Deterministic Garbage Collection: Nuke only after memory load
-                    if str(attached_image).endswith(".processing"):
-                        try:
-                            os.remove(attached_image)
-                            print(f"[{get_log_time()}] [SYSTEM] Mobile Optic Feed purged from drive.")
-                        except Exception as cleanup_e:
-                            print(f"[{get_log_time()}] [SYSTEM] Warning: Could not purge image - {cleanup_e}")
 
             past_context = memory.query_and_prune(str(user_input) + " " + cortex_summary)
             if past_context:
@@ -2390,7 +2803,7 @@ class AureliaUI(QMainWindow):
                 memory_block = ""
 
             if is_autonomous:
-                query_block = f"[AUTONOMOUS NEURAL TRIGGER - DO NOT WAIT FOR GEIGER]: {user_input}\nInitiate conversation organically based on this telemetry shift."
+                query_block = f"{user_input}"
             else:
                 query_block = f"[GEIGER'S QUERY]: {user_input}{user_img_context}"
 
@@ -2417,12 +2830,21 @@ class AureliaUI(QMainWindow):
 
             if len(self.chat_history) >= 16 and not getattr(self, 'is_summarizing', False):
                 messages_to_compress = self.chat_history[:8]
+                self.chat_history = self.chat_history[8:]
                 self.is_summarizing = True 
                 asyncio.create_task(self.update_rolling_narrative(messages_to_compress))
 
             report_delivered = False
+            
+            # --- NEW: AGENTIC MEMORY INJECTION (TOP - HOISTED) ---
+            try:
+                immersive_context = await self.loop.run_in_executor(None, load_semantic_profile)
+            except Exception:
+                immersive_context = "{}"
+
             for step in range(5): 
                 jit_history = list(working_history)
+                
                 last_msg = jit_history[-1]
                 
                 silent_context_note = ""
@@ -2432,12 +2854,16 @@ class AureliaUI(QMainWindow):
                 jit_history[-1] = {
                     "role": last_msg["role"],
                     "content": (
+                        f"=== BACKGROUND & SENSORY CONTEXT ===\n"
+                        f"[IMMERSIVE CONTEXT (AGENTIC MEMORY)]:\n{immersive_context}\n\n"
                         f"[ONGOING SESSION NARRATIVE]:\n{self.rolling_narrative}\n\n"
                         f"{memory_block}\n"
                         f"{silent_context_note}\n"
+                        f"{internal_feed}\n\n"
+                        f"[VISUAL CORTEX SUMMARY (External)]:\n{cortex_summary}{sanity_note}{fatigue_warning}\n\n"
+                        f"=== IMMEDIATE TRIGGER (YOUR PRIMARY FOCUS) ===\n"
                         f"{last_msg['content']}\n\n"
-                        f"[INTERNAL SOMATIC FEELINGS]:\n{internal_feed}\n\n"
-                        f"[VISUAL CORTEX SUMMARY (External)]:\n{cortex_summary}{sanity_note}{fatigue_warning}"
+                        f"-> REACTION MANDATE: Your absolute highest priority right now is to respond directly to the IMMEDIATE TRIGGER above. Use the sensory context to color your response, but do NOT ignore his actual words."
                     )
                 }
 
@@ -2452,18 +2878,35 @@ class AureliaUI(QMainWindow):
                 needs_silence = False
                 needs_set_goal = False
                 needs_report = False
+                needs_update_profile = False
                 
                 dynamic_mood = "SOFT"
-                
-                # NEW: Audio pre-cooking variables
                 audio_future = None
                 audio_cooking_started = False
+                is_thinking = False
                 
                 print(f"\n[{get_log_time()}] [ORCHESTRATOR] 80B Streaming Response:")
 
                 async for chunk in response:
-                    if chunk.choices[0].delta.content:
-                        token = chunk.choices[0].delta.content
+                    delta = chunk.choices[0].delta
+                    
+                    if getattr(delta, 'reasoning_content', None):
+                        if not is_thinking:
+                            full_reply += "<think>\n"
+                            is_thinking = True
+                            print("<think>\n", end="", flush=True)
+                        token = delta.reasoning_content
+                        print(token, end="", flush=True)
+                        full_reply += token
+                        
+                    if getattr(delta, 'content', None):
+                        if is_thinking:
+                            if not full_reply.endswith("</think>\n"):
+                                full_reply += "\n</think>\n"
+                                print("\n</think>\n", end="", flush=True)
+                            is_thinking = False
+                            
+                        token = delta.content
                         print(token, end="", flush=True) 
                         full_reply += token
                         
@@ -2476,17 +2919,20 @@ class AureliaUI(QMainWindow):
                                 else:
                                     dynamic_mood = extracted_mood
                         
-                        # The exact moment the internal monologue starts, her spoken text is 100% finished.
-                        # We extract ALL spoken text here and throw it to the Sous-Chef thread to cook instantly.
                         if "<YUNO_KERNEL>" in full_reply.upper() and not audio_cooking_started:
                             audio_cooking_started = True
-                            spoken_matches = re.findall(r'["“”](.*?)["“”]', full_reply, re.DOTALL)
-                            clean_text = " ".join(spoken_matches).strip()
                             
-                            # --- FIX: SANITIZE TEXT FOR MOSS-TTS ---
+                            no_kernel = re.sub(r'<YUNO_KERNEL>[\s\S]*?(</YUNO_KERNEL>|$)', '', full_reply, flags=re.IGNORECASE | re.DOTALL)
+                            audio_text_source = sanitize_ui_output(no_kernel)
+                            
+                            spoken_matches = re.findall(r'["“”](.*?)["“”]', audio_text_source, re.DOTALL)
+                            if spoken_matches:
+                                clean_text = " ".join(spoken_matches).strip()
+                            else:
+                                clean_text = audio_text_source.strip()
+                            
                             if clean_text:
                                 clean_text = clean_text.replace("—", "... ").replace("–", "... ").replace("-", " ")
-                            # ---------------------------------------
 
                             if clean_text and getattr(self, 'ENABLE_TTS', ENABLE_TTS) and voice_box:
                                 print(f"\n[{get_log_time()}] [TTS] Spoken text locked. Cooking audio in background... ", end="", flush=True)
@@ -2495,11 +2941,11 @@ class AureliaUI(QMainWindow):
                         if "</IMAGE>" in full_reply: needs_image = True
                         if "</SET_GOAL>" in full_reply: needs_set_goal = True
                         if "</REPORT>" in full_reply: needs_report = True
+                        if "</UPDATE_PROFILE>" in full_reply: needs_update_profile = True
                         if "[NO_ACTION]" in full_reply.upper() or "<NO_ACTION>" in full_reply.upper(): needs_silence = True
                 
                 print("\n") 
                 
-                # 1. ALWAYS trigger the report window if a report exists
                 if "<REPORT>" in full_reply and not needs_report:
                     full_reply += "</REPORT>"
                     needs_report = True
@@ -2507,41 +2953,99 @@ class AureliaUI(QMainWindow):
                 if "<IMAGE>" in full_reply and not needs_image:
                     full_reply += "</IMAGE>"
                     needs_image = True
+                    
                 if "<SET_GOAL>" in full_reply and not needs_set_goal:
                     full_reply += "</SET_GOAL>"
                     needs_set_goal = True
+                    
+                if "<UPDATE_PROFILE>" in full_reply and not needs_update_profile:
+                    full_reply += "</UPDATE_PROFILE>"
+                    needs_update_profile = True
 
-                is_tool_call = needs_report or needs_set_goal or needs_image
+                is_tool_call = needs_report or needs_set_goal or needs_image or needs_update_profile
                 
-                if "<PYTHON>" in full_reply.upper() or "<SEARCH>" in full_reply.upper():
+                # --- FACT UPDATE INTERCEPT ---
+                if "[UPDATE_FACT:" in full_reply.upper():
+                    match = re.search(r'\[UPDATE_FACT:\s*(.*?)\]', full_reply, re.IGNORECASE)
+                    if match:
+                        fact_observation = match.group(1).strip()
+                        goal_text = (
+                            f"Database Task: Update the Agentic Memory JSON profile with this new fact: '{fact_observation}'. "
+                            f"1. Use <READ_LINES> to load C:\\Aurelia_Project\\Aurelia_Saved_Scripts\\Aurelia_Agentic_Memory.json. "
+                            f"2. Reason out the correct category for this fact (e.g., dietary, technical, personality). "
+                            f"3. Use <REPLACE_LINES> or <WRITE_FILE> to inject this fact cleanly into the JSON structure. "
+                            f"Ensure the JSON remains syntactically valid."
+                        )
+                        self.loop.call_soon_threadsafe(
+                            self.subconscious_queue.put_nowait, 
+                            (0, next(_goal_counter), {"id": f"fact_{int(time.time())}", "description": goal_text, "priority": 10, "status": "Active"})
+                        )
+                        self.signals.add_bubble.emit("System", "Subconscious Lobe tasked with updating Agentic Memory.")
+
+                legacy_tools = ["<PYTHON>", "<SEARCH>", "<BROWSE>", "<INSPECT_DOM>", "<READ_LINES>", "<REPLACE_LINES>", "<WRITE_FILE>"]
+                if any(tag in full_reply.upper() for tag in legacy_tools):
                     print(f"[{get_log_time()}] [ORCHESTRATOR] WARNING: 80B attempted legacy tool use. Intercepting.")
                     working_history.append({"role": "assistant", "content": full_reply})
-                    working_history.append({"role": "user", "content": "[FORMAT CORRECTION]: You are the Executive Core. You cannot write code or search the web directly. Use <SET_GOAL> to delegate this to the Subconscious. Rewrite your response without <PYTHON> or <SEARCH> tags."})
+                    working_history.append({"role": "user", "content": "[FORMAT CORRECTION]: You are the Executive Core. You cannot write code or search the web directly. Use <SET_GOAL> to delegate this to the Subconscious. Rewrite your response without legacy tool tags."})
                     continue
 
                 if not is_tool_call:
                     issues = []
                     has_mood = bool(re.search(r'\[MOOD:\s*[a-zA-Z\/\-]+\]', full_reply, re.IGNORECASE))
-                    has_spoken = len(re.findall(r'["“”]', full_reply)) >= 2
                     has_kernel_close = "</YUNO_KERNEL>" in full_reply.upper()
                     
+                    no_kernel_test = re.sub(r'<YUNO_KERNEL>[\s\S]*?(</YUNO_KERNEL>|$)', '', full_reply, flags=re.IGNORECASE | re.DOTALL)
+                    actual_spoken_text = sanitize_ui_output(no_kernel_test).strip()
+                    has_spoken = len(actual_spoken_text) > 5
+                    
                     if not has_mood: issues.append("Missing [MOOD: TYPE] tag")
-                    if not has_spoken: issues.append("No spoken text detected (missing quotes)")
+                    if not has_spoken and not needs_silence: issues.append("No spoken text detected")
                     if not has_kernel_close: issues.append("Missing </YUNO_KERNEL> closing tag")
                     if len(re.findall(r'["“”]', full_reply)) > 6: issues.append("Too much spoken text (exceeded 2-3 sentences)")
+                    
+                    # --- PATCH: DEAD CONVERSATION SENTINEL ---
+                    if str(user_input).strip().endswith("?"):
+                        distraction_words = ["pulse", "heartbeat", "chair", "breathing", "vitals", "thermal"]
+                        if not any(w in str(user_input).lower() for w in distraction_words):
+                            if any(w in actual_spoken_text.lower() for w in distraction_words):
+                                issues.append("You ignored a direct question to hyperfixate on physical sensations. You MUST answer the question directly in your spoken text")
+                    
+                    kernel_match = re.search(r'<YUNO_KERNEL>(.*?)</YUNO_KERNEL>', full_reply, re.IGNORECASE | re.DOTALL)
+                    if kernel_match:
+                        kernel_word_count = len(kernel_match.group(1).split())
+                        if kernel_word_count > 150:
+                            issues.append(f"Your <YUNO_KERNEL> is too long ({kernel_word_count} words). It must be strictly under 150 words")
                         
                     if issues and step < 2: 
                         print(f"[{get_log_time()}] [ORCHESTRATOR] WARNING: Format Sentinel tripped. Issues: {', '.join(issues)}. Forcing correction.")
                         correction = (
                             f"[FORMAT CORRECTION]: Your response violated these constraints: "
                             f"{', '.join(issues)}. "
-                            f"Rewrite your response now in the exact required format: "
-                            f"[MOOD: TYPE], interweave concise spoken quotes, and close your internal thoughts with </YUNO_KERNEL>. "
+                            f"Rewrite your response now. You MUST start with [NO_ACTION] or <SET_GOAL>, "
+                            f"followed by [MOOD: TYPE] on a new line, then your spoken quotes, "
+                            f"and close your internal thoughts with </YUNO_KERNEL>. "
                             f"Do NOT apologize or acknowledge this system message. Just output the corrected response."
                         )
                         working_history.append({"role": "assistant", "content": full_reply})
                         working_history.append({"role": "user", "content": correction})
                         continue
+
+                if needs_update_profile:
+                    match = re.search(r'<UPDATE_PROFILE>(.*?)</UPDATE_PROFILE>', full_reply, re.DOTALL)
+                    profile_payload = match.group(1).strip() if match else ""
+                    if profile_payload:
+                        try:
+                            clean_payload = profile_payload.replace("```json", "").replace("```", "").strip()
+                            new_data = json.loads(clean_payload)
+                            success = await self.loop.run_in_executor(None, update_semantic_profile, new_data)
+                            if success:
+                                print(f"[{get_log_time()}] [ORCHESTRATOR] INFO: Agentic Memory successfully updated.")
+                                self.signals.add_bubble.emit("System", "Agentic Memory Profile Updated.")
+                                immersive_context = await self.loop.run_in_executor(None, load_semantic_profile)
+                            else:
+                                print(f"[{get_log_time()}] [ORCHESTRATOR] ERROR: Failed to write Agentic Memory.")
+                        except Exception as e:
+                            print(f"[{get_log_time()}] [ORCHESTRATOR] ERROR: Failed to parse UPDATE_PROFILE JSON - {e}")
 
                 if needs_set_goal:
                     match = re.search(r'<SET_GOAL>(.*?)</SET_GOAL>', full_reply, re.DOTALL)
@@ -2555,7 +3059,7 @@ class AureliaUI(QMainWindow):
                             print(f"[{get_log_time()}] [ORCHESTRATOR] WARNING: Subconscious busy. Silently castrating background <SET_GOAL>.")
                             full_reply = re.sub(r'<SET_GOAL>.*?</SET_GOAL>', '', full_reply, flags=re.DOTALL)
                         else:
-                            goal_id = memory.add_goal(goal_desc, priority=goal_priority)
+                            goal_id = await self.loop.run_in_executor(None, memory.add_goal, goal_desc, goal_priority)
                             if goal_id is not None:
                                 trigger_type = "User-Directed" if not is_autonomous else "Autonomous"
                                 print(f"[{get_log_time()}] [ORCHESTRATOR] INFO: {trigger_type} Goal Registered: {goal_desc}")
@@ -2594,19 +3098,37 @@ class AureliaUI(QMainWindow):
                     current_mood = "ANGRY"
                     full_reply = re.sub(r'(?i)\[MOOD:\s*UNSTABLE\]', '[MOOD: ANGRY]', full_reply)
                     
+                if "<YUNO_KERNEL>" in full_reply:
+                    pre_kernel, kernel_part = full_reply.split("<YUNO_KERNEL>", 1)
+                    raw_spoken = sanitize_ui_output(pre_kernel).strip()
+                    
+                    if raw_spoken and not re.search(r'["“”]', raw_spoken):
+                        print(f"[{get_log_time()}] [ORCHESTRATOR] Auto-correcting missing quotes around spoken text.")
+                        fixed_pre_kernel = pre_kernel.replace(raw_spoken, f'"{raw_spoken}"', 1)
+                        full_reply = f"{fixed_pre_kernel}<YUNO_KERNEL>{kernel_part}"
+                    
                 display_reply = sanitize_ui_output(full_reply)
                 has_spoken = len(re.findall(r'["“”]', display_reply)) >= 2
                 
-                # --- UNIFIED AUDIO QUEUE LOGIC (Pre-Cook Harvest) ---
-                # 2. ALWAYS wait for TTS and queue the audio if she spoke
-                if not is_silent:
-                    spoken_matches = re.findall(r'["“”](.*?)["“”]', display_reply, re.DOTALL)
-                    clean_spoken = " ".join(spoken_matches).strip()
+                if is_tool_call and not has_spoken and not is_silent and len(display_reply) < 5 and step < 2:
+                    working_history.append({"role": "assistant", "content": full_reply})
+                    working_history.append({"role": "user", "content": "[SYSTEM: Background tool processed successfully. Now synthesize your spoken response to Geiger using [MOOD] and quotes.]"})
+                    self.session_transcript.append({"role": "assistant", "content": full_reply})
+                    self.session_transcript.append({"role": "user", "content": "[SYSTEM: Background tool processed successfully. Now synthesize your spoken response to Geiger using [MOOD] and quotes.]"})
+                    continue
+
+                if not is_silent and has_spoken:
+                    no_kernel = re.sub(r'<YUNO_KERNEL>[\s\S]*?(</YUNO_KERNEL>|$)', '', full_reply, flags=re.IGNORECASE | re.DOTALL)
+                    audio_text_source = sanitize_ui_output(no_kernel)
                     
-                    # --- FIX: SANITIZE TEXT FOR MOSS-TTS ---
+                    spoken_matches = re.findall(r'["“”](.*?)["“”]', audio_text_source, re.DOTALL)
+                    if spoken_matches:
+                        clean_spoken = " ".join(spoken_matches).strip()
+                    else:
+                        clean_spoken = audio_text_source.strip()
+                    
                     if clean_spoken:
                         clean_spoken = clean_spoken.replace("—", "... ").replace("–", "... ").replace("-", " ")
-                    # ---------------------------------------
 
                     if clean_spoken:
                         pre_cooked_audio = None
@@ -2620,19 +3142,15 @@ class AureliaUI(QMainWindow):
                                 print(f"[{get_log_time()}] [TTS Pre-Cook] ERROR: {e}")
                                 
                         self.audio_pipeline.put((clean_spoken, current_mood, pre_cooked_audio))
-                # -----------------------------
-
-                if is_tool_call and not has_spoken and not is_silent and step < 2:
-                    working_history.append({"role": "assistant", "content": full_reply})
-                    working_history.append({"role": "user", "content": "[SYSTEM: Background tool processed successfully. Now synthesize your spoken response to Geiger using [MOOD] and quotes.]"})
-                    self.session_transcript.append({"role": "assistant", "content": full_reply})
-                    self.session_transcript.append({"role": "user", "content": "[SYSTEM: Background tool processed successfully. Now synthesize your spoken response to Geiger using [MOOD] and quotes.]"})
-                    continue
 
                 if not is_autonomous:
                     self.chat_history.append({"role": "user", "content": query_block})
+                    self.chat_history.append({"role": "assistant", "content": full_reply})
+                else:
+                    if has_spoken:
+                        self.chat_history.append({"role": "user", "content": query_block})
+                        self.chat_history.append({"role": "assistant", "content": full_reply})
                 
-                self.chat_history.append({"role": "assistant", "content": full_reply})
                 self.session_transcript.append({"role": "assistant", "content": full_reply}) 
                 
                 self.last_speech_time = time.time()
@@ -2656,31 +3174,31 @@ class AureliaUI(QMainWindow):
                             quality_score += 0.30
                         if re.search(r'\[MOOD:\s*\w+\]', full_reply): quality_score += 0.15
                         
-                        # --- UPDATED: QUOTE FIX ---
                         if len(re.findall(r'["“”]', display_reply)) >= 2: quality_score += 0.15
                             
                         final_importance = round(max(0.1, min(quality_score, 0.8)), 2)
-                        memory.save_memory(content=save_event, mood=current_mood, importance=final_importance, mem_type="conversation")
+                        
+                        await self.loop.run_in_executor(None, memory.save_memory, save_event, current_mood, final_importance, "conversation")
                         print(f"[{get_log_time()}] [MEMORY ENGINE] INFO: Response graded. Importance set to: {final_importance}")
                     except Exception as e:
                         print(f"[{get_log_time()}] [MEMORY ENGINE] ERROR: {e}")
                 else:
                     print(f"[{get_log_time()}] [MEMORY ENGINE] INFO: Skipped saving [NO_ACTION] background event to prevent DB clutter.")
 
-                if not is_silent:
+                if not is_silent and has_spoken:
                     self.signals.add_bubble.emit("Aurelia", display_reply)
                     
-                    # --- FIXED: ATOMIC MOBILE GATEWAY OUTBOX ROUTING ---
                     try:
-                        timestamp = f"{time.time():.6f}"
-                        outbox_path = MOBILE_OUTBOX_DIR / f"msg_{timestamp}.txt"
-                        with open(outbox_path, "w", encoding="utf-8") as f:
+                        safe_name = generate_safe_filename("msg")
+                        temp_path = MOBILE_OUTBOX_DIR / f"{safe_name}.tmp"
+                        final_path = MOBILE_OUTBOX_DIR / f"{safe_name}.txt"
+                        with open(temp_path, "w", encoding="utf-8") as f:
                             f.write(display_reply)
+                        os.replace(temp_path, final_path)
                     except Exception as outbox_e:
                         print(f"[{get_log_time()}] [MOBILE TETHER] ERROR: Could not write to outbox: {outbox_e}")
-                    # --------------------------------------
                 else:
-                    print(f"[{get_log_time()}] [ORCHESTRATOR] INFO: Aurelia completed a silent background task.")
+                    print(f"[{get_log_time()}] [ORCHESTRATOR] INFO: Aurelia completed a silent background task or observation.")
                 
                 break 
 

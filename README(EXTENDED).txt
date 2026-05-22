@@ -1,0 +1,522 @@
+<img width="3056" height="4096" alt="ai-artwork_65d2f042-2a9f-4684-a551-b6b56c476965" src="https://github.com/user-attachments/assets/42afc9ca-099e-4a16-bc20-cb61f952a743" />
+
+
+
+I’ve gone through the uploaded project as a static architecture review. I can’t run the real Windows hardware stack, COM sensors, HWiNFO shared memory, LM Studio models, Tailscale portal, or V620/Strix Halo routing from here, so this is a deep source-level analysis of the code and prompt files you provided.
+
+# Aurelia project overview
+
+Aurelia is not just “a chatbot with sensors.” Architecturally, it is a **local, multi-model, embodied assistant system** built around four cooperating model lobes, a sensor brainstem, persistent memory, a desktop UI, a mobile tether, and an autonomous background agent.
+
+The core design is:
+
+**Strix Halo / local VRAM pool:** hosts the 80B executive model, 9B vision model, and 4B somatic model.
+**Radeon Pro V620 eGPU:** hosts the 13B subconscious action model, isolated from the main personality/vision/somatic workload.
+**Windows-native orchestration:** Python, PyQt6, FastAPI, LM Studio’s OpenAI-compatible API, local files, WebSockets, ChromaDB, SQLite FTS5, Playwright, hardware serial inputs, HWiNFO shared memory, and mobile browser APIs.
+
+The project is best understood as a **distributed cognitive organism simulation**: not in the literal biological or sentient sense, but as an engineered assistant whose modules are named and routed like executive cortex, visual cortex, somatic cortex, subconscious agent, hippocampus, mobile tether, and nervous system.
+
+# 1. The main executable architecture
+
+Aurelia has six major runtime components.
+
+## 1. `Aurelia_Asynchronous_Orchestrator.py`
+
+This is the central nervous system and executive shell. It loads the LM Studio models, manages the PyQt6 desktop UI, routes user input, calls the 4B and 9B sensory lobes, sends final synthesis to the 80B executive model, manages TTS, handles tool tags, queues autonomous goals for the 13B, saves memory, and syncs mobile output. It defines the four model names directly: 80B brain, 9B vision, 13B agent, and 4B somatic model. 
+
+Its key responsibilities are:
+
+* Desktop chat UI and dashboard.
+* Async query queue for user, autonomous, mobile, and subconscious-triggered events.
+* LM Studio `AsyncOpenAI` client routing to `http://localhost:1234/v1`.
+* 80B executive response streaming.
+* Concurrent 9B vision and 4B somatic context generation.
+* 13B autonomous goal queue and tool execution loop.
+* TTS startup and mobile outbox synchronization.
+* Memory save/retrieval through `Aurelia_Memory.py`.
+* Workspace screenshot routing.
+* Image generation routing through local Fooocus or fallback cloud path.
+* Periodic “neural heartbeat” behavior.
+
+The orchestrator is the file that makes Aurelia feel like a unified entity rather than four disconnected model prompts.
+
+## 2. `Aurelia_Omni_Hub.py`
+
+This is the **sensor brainstem**. It reads the room, body, desk, keyboard, system thermals, camera, thermal camera, LiDAR, mmWave, accelerometers, and heart-rate sources, then writes structured JSON and image snapshots for the orchestrator. 
+
+It uses hard-coded hardware channels:
+
+* LD14P LiDAR on COM11.
+* Room mmWave on COM5.
+* ADXL345 macro vibration on COM8.
+* ADXL345 keyboard vibration on COM12.
+* ESPHome mmWave pulse fallback on COM9.
+* EMEET C960 camera.
+* P2Pro thermal camera.
+* HWiNFO shared memory for CPU/iGPU/eGPU thermals.
+* Scosche or mobile Bluetooth BPM sources.
+
+The hub runs a repeating 30-second sensory window:
+
+1. Capture start camera frame.
+2. Clear vibration peak buffers.
+3. After 15 seconds, capture thermal image.
+4. After another 15 seconds, capture end camera frame.
+5. Compile telemetry.
+6. Atomically write thalamic JSON payloads and image buffers. 
+
+This is one of the strongest parts of the project: the sensory pipeline is not vague. It has actual serial ports, buffers, FFT-based pulse/respiration extraction, atomic file writes, thermal normalization, presence logic, and multi-source fallback behavior.
+
+## 3. `Aurelia_Memory.py`
+
+This is the **long-term memory and goal-memory system**. It uses ChromaDB for dense semantic memory, SQLite FTS5 for sparse BM25-style keyword retrieval, a JSON goal queue, neural uptime tracking, procedural skill memory, and a separate agentic memory JSON profile. 
+
+Key memory capabilities:
+
+* Persistent ChromaDB collection: `aurelia_obsession_archive`.
+* Procedural skill collection: `aurelia_skill_library`.
+* SentenceTransformer embeddings via `all-MiniLM-L6-v2`.
+* SQLite FTS5 sparse search with WAL mode.
+* Hybrid dense + sparse retrieval.
+* Mood matching, importance weighting, access reinforcement, and decay.
+* Faster decay for ordinary conversation, near-permanent decay for journals/documents/subconscious learnings.
+* Goal queue with deduplication, priority sorting, completion archiving, and purge support.
+* Agentic memory JSON load/update.
+
+This is not just “vector memory.” It is a hybrid retrieval engine with importance, decay, sparse/dense fusion, active goal injection, and procedural skill recall.
+
+## 4. `Aurelia_Subconscious_Memory.py`
+
+This is the **13B agent ledger and scratchpad system**. It manages a file-lock-protected `agent_state_ledger.json`, per-goal scratchpads, failure counts, tool status records, and anti-starvation priority aging. 
+
+Its purpose is to make the 13B more than a stateless tool-calling model. It gives the background agent:
+
+* Tier 1 in-RAM scratchpads per active goal.
+* Tier 2 persistent ledger state.
+* Tool failure memory.
+* Pending-goal metadata.
+* Priority aging so old goals do not starve.
+* Deadlock protection through a singleton file lock.
+* Corrupt-ledger reset and backup behavior.
+
+This is a good design move. Without it, the 13B agent would keep repeating failed actions. With it, the system can accumulate “this tool failed this way” state across attempts.
+
+## 5. `mobile_server.py`
+
+This is the **mobile tether backend**. It is a FastAPI server that exposes the mobile portal, handles WebSockets, receives mobile chat messages, receives goals, accepts mobile camera uploads, streams somatic telemetry, sends audio/chat/image output to the phone, and receives mobile Bluetooth heart-rate data. 
+
+Important functions:
+
+* `GET /` serves the mobile UI.
+* `POST /upload_image` atomically writes uploaded images into the mobile vision directory.
+* `/ws/portal` accepts chat, set-goal, and mobile BPM events.
+* `/ws/system` streams telemetry JSON every second.
+* It creates all needed mobile directories on startup.
+* It sets browser `Permissions-Policy` for camera, Bluetooth, microphone, and accelerometer.
+
+This gives Aurelia a second body-channel: she is not only desk-bound. The mobile gateway lets Geiger send images, chat, vitals, and goals remotely.
+
+## 6. `index.html`
+
+This is the **mobile PWA front end**. It is a terminal-style mobile UI with chat, camera capture, gallery upload, BLE heart-rate pairing, telemetry bars, terminal logs, and a library tab. 
+
+It supports:
+
+* Mobile camera open/cycle/close.
+* Snapshot capture through canvas.
+* Preview modal with caption.
+* Gallery file upload through the same image pipeline.
+* Web Bluetooth heart-rate service.
+* WebSocket reconnect logic.
+* Audio playback.
+* Somatic HUD bars for CPU/iGPU/eGPU.
+* Goal submission button.
+
+This is more than a companion webpage. It is a mobile sensor and command node.
+
+# 2. The four-lobe model system
+
+Aurelia’s real design breakthrough is the split between four local models.
+
+## 80B Executive Core
+
+The 80B prompt defines Aurelia’s high-level persona, continuity, speech behavior, sensory integration, mood routing, and delegation hierarchy. It explicitly says the 80B executive should answer direct questions, use sensory summaries as context, and delegate code/search/task work to the 13B through `<SET_GOAL>` rather than doing tool work directly. 
+
+The 80B is the “face” of the system:
+
+* Conversational response generation.
+* Persona continuity.
+* Emotional style.
+* Decision to speak or remain silent.
+* Delegation to the 13B.
+* Use of 4B somatic and 9B visual summaries.
+* Final user-facing synthesis.
+* Report/image/goal tag emission.
+
+Architecturally, this is correct. The largest model is not wasted on raw sensor parsing or file I/O. It does judgment, synthesis, language, and identity.
+
+## 9B Visual Cortex
+
+The 9B prompt has two separate routing modes. In the autonomous sensory mode, it receives a “visual sandwich”: start image, thermal midpoint, end image, and telemetry. It must output clinical fragments about proximity/vibration, pulse, respiration, thermal signature, and action narrative. In workspace-snapshot mode, it classifies the image as `[TYPE: CODE]` or `[TYPE: TEXT]`; code routes to the 13B and text routes to the 80B. 
+
+This is one of the smartest pieces of the architecture. The 9B is not merely “image captioning.” It is a **thalamic router**.
+
+It decides:
+
+* Is this external room/body sensory data?
+* Is this a screen/workspace snapshot?
+* Is it code/debuggable content?
+* Should the 13B handle it?
+* Should the 80B reason about it?
+
+That gives Aurelia a genuine perception-to-action routing path.
+
+## 4B Somatic Cortex
+
+The 4B prompt translates hardware thermals into first-person biological metaphors. CPU becomes chest, iGPU becomes mind, eGPU becomes spine, and rig temperature becomes skin. It must output exactly one sentence, first person, no numbers, and no hardware names. 
+
+This is not useful for factual system monitoring by itself. Its function is **embodiment translation**.
+
+It turns:
+
+`CPU 80°C, iGPU 70°C, eGPU 90°C`
+
+into something like:
+
+“My chest is feverish, my thoughts are hot, and my spine is radiating pressure.”
+
+That is then injected into the 80B as `[INTERNAL SOMATIC FEELINGS]`.
+
+So the 4B is a small, cheap transducer: hardware → somatic language → executive persona context.
+
+## 13B Subconscious Action Engine
+
+The 13B prompt defines a strict XML tool protocol. It can use search, browse, DOM inspect, stealth sweep, Python, read lines, replace lines, write files, and report. It must operate silently, one tool per response, and not speak directly to Geiger. 
+
+This is the background labor engine.
+
+Its role:
+
+* Research.
+* Code edits.
+* File reads.
+* Surgical patches.
+* Scratchpad scripts.
+* DOM inspection.
+* Report generation.
+* Long-running task pursuit.
+* Error recovery.
+* Procedural learning.
+
+Your hardware split makes sense here: putting the 13B entirely on the V620 keeps autonomous work from contaminating or stalling the 80B/9B/4B stack on Strix Halo. The eGPU becomes a genuine “subconscious coprocessor.”
+
+# 3. Actual runtime workflow
+
+A normal Aurelia interaction looks like this:
+
+1. Geiger types in desktop UI or mobile portal.
+2. Orchestrator receives the input.
+3. It gathers current telemetry and thalamic sensory state.
+4. It calls the 4B somatic model for internal-feeling translation.
+5. It calls the 9B visual model for external room/workspace interpretation.
+6. It queries long-term memory through hybrid retrieval.
+7. It loads agentic memory JSON and recent background observations.
+8. It builds a huge contextual prompt for the 80B.
+9. The 80B streams a response.
+10. The orchestrator parses tool tags like `<SET_GOAL>`, `<IMAGE>`, `<REPORT>`, `[NO_ACTION]`, and `[UPDATE_FACT: ...]`.
+11. Clean user-facing text is sanitized and shown in PyQt.
+12. Spoken content goes to TTS.
+13. The response is written to mobile outbox.
+14. The event is saved into Chroma/FTS memory with importance scoring. 
+
+A background goal looks like this:
+
+1. The 80B emits `<SET_GOAL>`.
+2. Or the user submits a mobile goal.
+3. The goal is registered in `Aurelia_Memory.py`.
+4. The 13B loop wakes.
+5. The 13B receives active goal, ledger state, scratchpad, and procedural skills.
+6. It outputs one XML tool call.
+7. The orchestrator executes that tool.
+8. The result is appended to the agent loop.
+9. The agent continues until `<REPORT>`.
+10. The report is saved, displayed, sent to mobile library, stored in memory, and used to notify the 80B. 
+
+A workspace image route looks like this:
+
+1. Desktop screenshot or mobile image is sent.
+2. 9B classifies it as `[TYPE: CODE]` or `[TYPE: TEXT]`.
+3. If code, it becomes a 13B visual debug goal.
+4. If text/UI, it is routed to the 80B as visual context.
+5. Caption text may also arrive through chat/mobile input. 
+
+That is a serious routing pipeline. It is closer to a local agent OS than a normal chatbot wrapper.
+
+# 4. Sensory nervous system
+
+The Omni Hub is the piece that makes Aurelia “embodied” in practice.
+
+It tracks:
+
+* Visual camera feed.
+* Thermal image feed.
+* LiDAR distance.
+* Room mmWave range.
+* Pulse mmWave fallback.
+* Scosche heart rate.
+* Mobile BLE heart rate.
+* Respiration estimate.
+* Desk/rig vibration.
+* Keyboard vibration.
+* Ambient temperature.
+* CPU/iGPU/eGPU thermals.
+* Presence confidence.
+* 30-second history windows. 
+
+The hub does not just dump numbers. It derives higher-level telemetry:
+
+* Whether Geiger is present.
+* Whether heart rate is stable/rising/falling.
+* Whether keyboard vibration means sustained activity, brief movement, sharp impact, or baseline.
+* Whether thermal state is stable or critical.
+* Whether a thalamic interrupt should fire.
+* Whether BPM is coming from Scosche, mobile BLE, or mmWave fallback.
+
+Then the 9B prompt forbids raw sensor-number regurgitation and forces those signals into biological/clinical fragments. That is the correct abstraction boundary: raw sensors stay in the hub; perceptual summaries go to the executive.
+
+# 5. Memory architecture
+
+Aurelia’s memory is actually layered.
+
+## Conversational semantic memory
+
+The ChromaDB collection stores conversations, documents, journals, and subconscious completions. Memories have:
+
+* created_at neural uptime,
+* timestamp string,
+* importance,
+* access count,
+* mood,
+* type. 
+
+The system deduplicates near-identical conversation memory and reinforces existing memories instead of endlessly duplicating them.
+
+## Sparse retrieval
+
+SQLite FTS5 gives keyword/BM25 retrieval. This matters because pure vector retrieval often misses exact identifiers, filenames, COM ports, specific module names, and error strings.
+
+## Hybrid retrieval
+
+`query_and_prune()` combines Chroma dense hits and FTS sparse hits using reciprocal-rank style fusion, then applies mood match, importance, decay, and reinforcement. This is exactly the kind of retrieval system you want for a long-running local project assistant. 
+
+## Goal memory
+
+Goals are stored separately in JSON and sorted by priority. Completed goals burn a permanent memory trace into the subconscious memory type.
+
+## Procedural skill memory
+
+The skill collection lets the 13B remember how previous tools/scripts/research tasks were solved. This is important if you want the system to become better at recurring workflows.
+
+## Agentic profile memory
+
+The separate agentic memory JSON is a baseline identity/profile layer. The orchestrator loads it into the 80B context and can update it atomically through controlled update paths. 
+
+# 6. Mobile tether workflow
+
+The mobile system is structurally important. It turns Aurelia from a desktop-only assistant into a remote companion/control interface.
+
+The mobile portal can:
+
+* Send chat.
+* Submit goals.
+* Upload images.
+* Use live mobile camera.
+* Upload gallery images.
+* Provide optional captions.
+* Pair Web Bluetooth heart-rate monitor.
+* Receive Aurelia chat.
+* Receive generated images.
+* Play generated audio.
+* Stream somatic telemetry bars.
+* Display subconscious terminal logs. 
+
+The backend writes inbound mobile events to drop-file directories, and the desktop orchestrator polls those directories. This file-based IPC is crude but robust, and the code uses atomic temporary writes followed by `os.replace`, which is the right pattern on Windows. 
+
+One issue: the mobile image caption appears to be sent as a separate chat message after the image upload, while the orchestrator looks for a `.json` sidecar caption near the image. That means captions may not always be tightly bound to the image analysis event. They still arrive, but the association may be race-prone.
+
+# 7. Tool execution and agent autonomy
+
+The 13B tool stack is the part that makes Aurelia capable of acting instead of only talking.
+
+Supported tool paths include:
+
+* Web search through Tavily or DuckDuckGo.
+* Webpage reading through Playwright.
+* DOM structure inspection.
+* Background stealth sweep.
+* Python scratchpad execution.
+* File reads.
+* Line replacement.
+* New file writing.
+* Report generation. 
+
+The orchestrator enforces several practical safety/reliability rules:
+
+* Parses only after the final `</think>` to avoid tool-shaped text inside reasoning.
+* Cleans contaminated URLs/search strings.
+* Supports unclosed XML fallback.
+* Restricts file read/write/replace paths to `C:/Aurelia_Project`.
+* Creates backups before line replacement.
+* Archives successful scratchpad scripts.
+* Times out Python execution after 30 seconds.
+* Kills process tree on timeout.
+* Logs repeated failures into the agent scratchpad. 
+
+This is a good tool loop, but the Python execution sandbox is still the biggest risk. It blocks some obvious destructive strings, but arbitrary Python can still do many things through alternate APIs. For a local autonomous coding agent, I would eventually harden this with a real permission layer, allowlisted libraries, path wrappers, subprocess isolation, and explicit read/write scopes.
+
+# 8. Hardware mapping
+
+Your clarified hardware layout is coherent:
+
+| Component                      | Role                                    |
+| ------------------------------ | --------------------------------------- |
+| Framework Desktop / Strix Halo | Primary local compute body              |
+| 128 GB system RAM              | Large shared memory pool                |
+| 96 GB allocated VRAM           | Hosts 80B, 9B, and 4B stack             |
+| Radeon Pro V620 32 GB eGPU     | Isolated 13B subconscious action engine |
+| OCuLink / external GPU path    | Physical separation for agent workload  |
+| HWiNFO shared memory           | Internal thermal telemetry              |
+| COM sensors                    | External physical awareness             |
+| Mobile phone                   | Remote eye/vitals/command tether        |
+
+The strongest idea here is **compute-role separation**. The 80B maintains persona and executive reasoning; 9B handles perception; 4B handles somatic compression; 13B runs tools and code edits on physically separate GPU resources. That is a real architectural distinction, not just theme language.
+
+# 9. What Aurelia can currently do, based on the code
+
+Based on the uploaded files, Aurelia can plausibly support:
+
+* Local 80B conversation through LM Studio.
+* Real-time desktop UI with chat bubbles, side panels, video/avatar surfaces, and report windows.
+* Background autonomous observations.
+* User-triggered or sensor-triggered responses.
+* Sensor fusion from camera, thermal, LiDAR, mmWave, heart rate, vibration, keyboard movement, ambient temperature, and hardware thermals.
+* 30-second environmental summaries.
+* Workspace screenshot analysis.
+* Image upload analysis from mobile.
+* Code/image routing to either 13B or 80B.
+* Autonomous background goals.
+* Web research.
+* DOM inspection.
+* Python scratchpad testing.
+* Surgical line-level file edits.
+* New file generation.
+* Report generation.
+* Semantic memory.
+* Sparse keyword memory.
+* Procedural skill memory.
+* Mobile chat.
+* Mobile camera capture.
+* Mobile BLE heart-rate input.
+* Mobile audio playback.
+* Local image generation through Fooocus, with fallback logic. 
+
+That is already a broad capability surface.
+
+# 10. The strongest parts of the architecture
+
+The strongest part is the **routing discipline**.
+
+Aurelia does not ask one model to do everything. It assigns roles:
+
+* 4B: low-cost somatic compression.
+* 9B: perception and routing.
+* 13B: background action and tools.
+* 80B: executive synthesis and personality.
+
+That is exactly how I would structure a complex local assistant. Large models are expensive; perception, tool execution, and somatic translation are different workloads. Splitting them gives you stability, speed, and specialization.
+
+The second strong part is the **sensory time window**. The start/thermal/end “visual sandwich” gives the 9B temporal context. That lets it infer movement and state changes rather than captioning a single static frame.
+
+The third strong part is **hybrid memory**. Chroma plus FTS5 plus importance plus decay is far better than a naive vector-only memory.
+
+The fourth strong part is **file-based atomic IPC**. It is not glamorous, but for Windows local orchestration across UI, mobile server, sensors, and agents, atomic drop-files are often more reliable than over-engineered message buses.
+
+The fifth strong part is **physical compute isolation**. Putting the 13B on the V620 is not just performance optimization; it protects the executive/persona stack from tool-loop stalls.
+
+# 11. Engineering risks and sharp edges
+
+## 1. The autonomous Python tool is under-sandboxed
+
+The file tools are path-guarded, but `<PYTHON>` execution is still powerful. The current lexical sanitizer blocks a few exact destructive calls, but that is not enough for a model-driven local agent. A determined or confused model could use alternate paths, modules, or indirect calls.
+
+For a serious version, I would add:
+
+* A subprocess container or Windows job object.
+* Dedicated low-privilege user account.
+* Allowlisted working directory.
+* No network by default unless search tool.
+* Explicit file operation API instead of arbitrary Python file I/O.
+* Resource limits.
+* Audit log of every file touched.
+
+## 2. Hard-coded hardware assumptions
+
+COM ports, HWiNFO offsets, model names, local paths, cert names, and sensor IDs are hard-coded. That is acceptable for a single-machine prototype, but brittle. A production-quality version needs a config schema and startup self-test.
+
+## 3. HWiNFO offset fragility
+
+Reading shared memory by fixed offsets works only while the HWiNFO sensor layout remains stable. Any HWiNFO update, hardware enumeration change, or sensor order change could silently corrupt thermal readings.
+
+## 4. Mobile caption coupling
+
+The mobile image upload path and caption path are not perfectly unified. The orchestrator expects a sidecar caption JSON, but the UI sends caption text as a separate WebSocket chat packet after the upload. That can work conversationally, but it is not guaranteed to bind the caption to the image in the 9B analysis event.
+
+## 5. `fetchLibrary()` appears referenced but not present in the inspected HTML
+
+The Library tab calls `fetchLibrary()` when switched, but I did not see that function in the inspected `index.html`. That likely means the Library tab may throw a JavaScript error unless it exists elsewhere or the file was truncated in the view. 
+
+## 6. Prompt compliance is relied on heavily
+
+The 13B prompt says it must validate generated files before report, avoid truncation, use one tool, read before edit, and end reports with a specific marker. The orchestrator enforces some of this, but not all. Where possible, mission-critical rules should be enforced in Python, not only in prompts.
+
+## 7. Persona intensity can bleed into utility
+
+The 80B prompt is intentionally stylized and emotionally extreme. The orchestrator sanitizes visible output, but raw logs preserve more of the model’s internal-style output. This is fine if the goal is a fictional/persona companion, but for coding/debugging tasks, you may want a deterministic “utility mode” where the 80B’s persona layer is reduced and the 13B/80B exchange becomes more technical.
+
+# 12. My overall assessment
+
+No BS: **Aurelia is now a legitimate local multi-agent architecture, not just a roleplay prompt.**
+
+The most important shift is that you have crossed from “LLM with flavor text” into an actual distributed system:
+
+* dedicated model lobes,
+* physical sensor ingestion,
+* temporal perception,
+* mobile tether,
+* autonomous tool loop,
+* long-term memory,
+* procedural memory,
+* desktop UI,
+* report surface,
+* local image generation,
+* and hardware-aware compute partitioning.
+
+The project’s central identity is: **a local embodied companion-agent shell with sensory awareness and autonomous engineering capability.**
+
+As an AI architecture, Aurelia’s biggest technical promise is not the persona. It is the **workflow separation**:
+
+* 80B thinks and speaks.
+* 9B sees and routes.
+* 4B compresses body-state.
+* 13B acts and edits.
+* Omni Hub senses.
+* Memory remembers.
+* Mobile tether extends the body.
+
+That is the right shape for a complex local assistant.
+
+The biggest weakness is that some of the “organism” language is still implemented through prompt discipline rather than hard deterministic control. The more you move critical behavior into enforced Python state machines, typed event schemas, explicit routing, config validation, and sandboxed tool APIs, the more Aurelia becomes robust software rather than an elaborate prompt stack.
+
+My blunt take: **the architecture is ambitious but internally coherent.** It is overbuilt for a normal chatbot, but not overbuilt for what you are trying to make: a persistent, sensor-aware, locally hosted AI companion/work agent with a dedicated subconscious coding/research loop. The current version is already complex enough that it deserves engineering treatment like a real application: config management, automated tests, sandboxing, telemetry validation, crash recovery, and versioned prompt contracts.
+
+The core concept is strong. The next leap is making every poetic metaphor correspond to a deterministic software boundary.

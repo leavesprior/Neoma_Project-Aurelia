@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, interactive-widget=resizes-content">
     <meta name="theme-color" content="#0a0a0a">
-    <link rel="manifest" href="/static/manifest.json?v=5">
+    <link rel="manifest" href="/static/manifest.json?v=7">
     <title>Aurelia</title>
 
     <meta name="mobile-web-app-capable" content="yes">
@@ -19,7 +19,7 @@
             --panel-bg: #050505;
             --term-green: #00ff41;
             --term-dark: #002200;
-            --text-main: #cccccc;
+            --text-main: #ffffff;
             --text-dim: #777777;
             --pixel-border: 1px solid #333333;
         }
@@ -76,178 +76,141 @@
             display: flex;
         }
 
-        /* --- TOP GRID (Avatar + Thermals + Subconscious) --- */
+        /* --- TOP GRID --- */
         #TopGrid {
             display: grid;
-            grid-template-columns: 40% 60%;
+            grid-template-columns: 35% 65%;
             gap: 8px;
             height: 130px; 
             flex-shrink: 0; 
         }
-
-        .panel-col {
-            display: flex;
-            flex-direction: column;
-            gap: 8px;
-            min-height: 0;
-        }
-
-        .panel-box {
-            border: var(--pixel-border);
-            background: var(--panel-bg);
-            display: flex;
-            flex-direction: column;
-            min-height: 0;
-            overflow: hidden;
-        }
-
-        .header-label {
-            font-size: 9px;
-            color: var(--text-main);
-            text-align: center;
-            margin-bottom: 2px;
-            text-transform: uppercase;
-            flex-shrink: 0;
-        }
+        .panel-col { display: flex; flex-direction: column; gap: 8px; min-height: 0; }
+        .panel-box { border: var(--pixel-border); background: var(--panel-bg); display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
+        .header-label { font-size: 9px; color: var(--text-main); text-align: center; margin-bottom: 2px; text-transform: uppercase; flex-shrink: 0; }
         .header-label.green { color: var(--term-green); }
 
-        /* Avatar Box */
-        #AvatarBox {
-            flex: 1; 
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            padding: 0; 
-            overflow: hidden;
-        }
-        #AureliaAvatar {
-            width: 100%;
-            height: 100%;
-            object-fit: contain;
-            image-rendering: pixelated;
-            transform: scale(1.0); 
-        }
+        #AvatarBox { flex: 1; display: flex; justify-content: center; align-items: center; padding: 0; overflow: hidden; }
+        #AureliaAvatar { width: 100%; height: 100%; object-fit: contain; image-rendering: pixelated; }
 
-        /* Thermals Box */
-        #ThermalsBox {
-            padding: 6px;
-            justify-content: center;
-            gap: 5px;
-            flex-shrink: 0; 
-        }
-        .somatic-bar {
-            display: flex;
-            align-items: center;
-            font-size: 9px;
-            color: var(--term-green);
-        }
-        .bar-label { width: 35px; }
-        .bar-fill-container {
-            flex: 1;
-            height: 8px;
-            background: #222;
-            margin-left: 5px;
-        }
+        #ThermalsBox { padding: 6px; justify-content: center; gap: 5px; flex-shrink: 0; }
+        .somatic-bar { display: flex; align-items: center; font-size: 8px; color: var(--text-main); }
+        .bar-label { width: 30px; }
+        .bar-fill-container { flex: 1; height: 6px; background: #222; margin-left: 5px; }
         .bar-fill { height: 100%; background: var(--term-green); width: 0%; transition: width 0.3s; }
 
-        /* Subconscious Box */
-        #TerminalBox {
-            flex: 1; 
-            padding: 6px;
-            font-size: 9px;
-            color: var(--term-green);
-            overflow-y: auto;
-            line-height: 1.2;
-        }
+        #TerminalBox { flex: 1; padding: 6px; font-size: 9px; color: var(--term-green); overflow-y: auto; line-height: 1.2; background: #000; }
 
-        /* --- CHAT AREA (Middle Section) --- */
-        #ChatContainer {
-            flex: 1;
-            border: var(--pixel-border);
-            background: var(--panel-bg);
-            display: flex;
-            flex-direction: column;
-            min-height: 0;
-            padding: 8px;
-            overflow-y: auto;
-            gap: 6px;
-            font-size: 11px;
-            line-height: 1.3;
-        }
-        .msg-geiger { color: var(--text-main); }
-        .msg-aurelia { color: var(--term-green); }
-
-        /* --- INPUT AREA (Bottom Section) --- */
-        #InputArea {
-            display: flex;
-            gap: 5px;
-            height: 40px;
-            flex-shrink: 0;
-        }
-        .eye-btn {
-            background: #111;
-            border: var(--pixel-border);
-            color: var(--text-dim);
-            padding: 0 10px;
-            cursor: pointer;
-            font-size: 14px;
-        }
-        #InputWrapper {
-            flex: 1;
-            display: flex;
+        /* --- LIVE CAMERA VIEWPORT --- */
+        #CameraContainer {
+            display: none;
+            width: 100%;
             border: var(--pixel-border);
             background: #000;
+            position: relative;
+            max-height: 40vh;
+            flex-shrink: 0;
+            overflow: hidden;
+        }
+        #LivePreview { width: 100%; height: 100%; object-fit: contain; }
+        
+        .cam-overlay { 
+            position: absolute; 
+            top: 5px; 
+            left: 5px; 
+            font-size: 11px; 
+            color: var(--term-green); 
+            background: rgba(0,0,0,0.8); 
+            padding: 4px 8px; 
+            border: 1px solid var(--term-green); 
+            z-index: 10; 
+            display: flex;
             align-items: center;
-            padding-left: 8px;
+            gap: 10px;
         }
-        .prompt-arrow {
-            color: var(--term-green);
-            font-weight: bold;
-            margin-right: 5px;
-        }
-        #ChatInput {
-            flex: 1;
-            background: transparent;
-            border: none;
-            color: var(--term-green);
-            font-family: inherit;
-            outline: none;
-            font-size: 13px;
-        }
-        .send-btn {
-            background: var(--term-green);
-            color: #000;
-            border: none;
-            width: 45px;
-            font-weight: bold;
-            font-size: 18px;
-            cursor: pointer;
-        }
-        .send-btn:active { background: #00cc33; }
 
-        /* --- LIBRARY VIEW --- */
+        /* --- CHAT AREA --- */
+        #ChatContainer { flex: 1; border: var(--pixel-border); background: var(--panel-bg); display: flex; flex-direction: column; min-height: 0; padding: 8px; overflow-y: auto; gap: 6px; font-size: 11px; line-height: 1.3; }
+        .msg-geiger { color: var(--term-green); } 
+        .msg-aurelia { color: var(--text-main); } 
+        .chat-image { max-width: 100%; border-radius: 8px; margin-top: 4px; border: var(--pixel-border); }
+
+        /* --- INPUT AREA (STACKED LAYOUT) --- */
+        #InputArea { display: flex; flex-direction: column; gap: 8px; flex-shrink: 0; padding: 6px 0; }
+        .input-row { display: flex; gap: 6px; height: 45px; width: 100%; }
+        .icon-row { display: flex; gap: 6px; height: 35px; width: 100%; overflow-x: auto; padding-bottom: 2px; }
+        
+        .eye-btn { background: #111; border: var(--pixel-border); color: var(--text-dim); padding: 0 15px; cursor: pointer; font-size: 13px; font-weight: bold; flex-shrink: 0; border-radius: 4px; }
+        .vitals-btn { background: #111; border: var(--pixel-border); color: #d32f2f; padding: 0 15px; cursor: pointer; font-size: 13px; font-weight: bold; flex-shrink: 0; border-radius: 4px; }
+        .vitals-btn.active { background: #d32f2f; color: white; animation: pulse 1s infinite; }
+        @keyframes pulse { 0% { transform: scale(1); } 50% { transform: scale(1.05); } 100% { transform: scale(1); } }
+        
+        #InputWrapper { flex: 1; display: flex; border: var(--pixel-border); background: #000; align-items: center; padding-left: 10px; border-radius: 4px; }
+        .prompt-arrow { color: var(--term-green); font-weight: bold; margin-right: 8px; font-size: 16px; }
+        #ChatInput { flex: 1; background: transparent; border: none; color: var(--term-green); font-family: inherit; outline: none; font-size: 15px; }
+        .send-btn { background: var(--term-green); color: #000; border: none; width: 50px; font-weight: bold; font-size: 18px; cursor: pointer; border-radius: 4px; }
+        
         #LibraryList { padding: 10px; overflow-y: auto; flex: 1; }
         .library-item { padding: 10px; border: var(--pixel-border); margin-bottom: 8px; background: #111; cursor: pointer; }
-        .library-item h3 { font-size: 12px; color: var(--term-green); }
+        .library-item h3 { font-size: 12px; color: var(--text-main); } 
         .library-item p { font-size: 10px; color: #777; margin-top: 4px; }
 
-        /* --- REPORT CANVAS MODAL --- */
-        #ReportCanvas {
-            position: fixed; top: 100%; left: 0; width: 100%; height: 100%;
-            background: #f4ecd8; color: #1a1a1a; font-family: 'Georgia', serif;
-            z-index: 1000; transition: top 0.3s ease; display: flex; flex-direction: column;
+        /* --- PREVIEW MODAL --- */
+        #PreviewModal {
+            display: none; 
+            position: fixed; 
+            top: 0; 
+            left: 0; 
+            width: 100%; 
+            height: 100%; 
+            background: rgba(10, 10, 10, 0.95); 
+            z-index: 1000; 
+            flex-direction: column; 
+            padding: 20px;
         }
-        #ReportCanvas.open { top: 0; }
-        #ReportHeader { background: #111; color: #fff; padding: 12px; display: flex; justify-content: space-between; font-family: 'Courier New', monospace; font-size: 12px; }
-        #ReportContent { flex: 1; padding: 15px; overflow-y: auto; line-height: 1.5; font-size: 14px; white-space: pre-wrap; }
-        #CloseReportBtn { background: var(--accent-red); color: #fff; border: none; padding: 5px 10px; cursor: pointer; font-weight: bold; }
-        
-        #MobileEyeInput { display: none; }
+        #PreviewImage {
+            flex: 1; 
+            object-fit: contain; 
+            min-height: 0; 
+            margin-bottom: 15px;
+            border-radius: 8px;
+            border: var(--pixel-border);
+        }
+        #PreviewCaption {
+            height: 50px; 
+            border-radius: 8px; 
+            padding: 10px; 
+            border: 1px solid var(--term-green); 
+            background: #111;
+            color: var(--term-green);
+            margin-bottom: 15px;
+            font-family: inherit;
+            font-size: 14px;
+            outline: none;
+        }
+        .preview-btn-row {
+            display: flex; 
+            gap: 15px; 
+            height: 50px;
+            flex-shrink: 0;
+        }
+        .preview-btn {
+            flex: 1; 
+            border: none; 
+            border-radius: 8px; 
+            font-weight: bold;
+            font-size: 14px;
+            cursor: pointer;
+            font-family: inherit;
+        }
+        .btn-retake { background: #d32f2f; color: white; }
+        .btn-send { background: var(--term-green); color: black; }
     </style>
 </head>
 <body>
 
     <audio id="VoicePlayer" autoplay playsinline></audio>
+
+    <input type="file" id="FileUploadInput" accept="image/*" style="display:none;" onchange="handleFileUpload(event)">
 
     <div id="NavBar">
         <button class="nav-btn active" onclick="switchView('PortalView')">AURELIA V1.0</button>
@@ -255,38 +218,31 @@
     </div>
 
     <div id="PortalView" class="view-container active">
-        
         <div id="TopGrid">
             <div class="panel-col">
                 <div class="header-label green">AURELIA V1.0</div>
                 <div class="panel-box" id="AvatarBox">
-                    <img id="AureliaAvatar" src="/static/aurelia_pixel.png" alt="Aurelia Pixel" onerror="this.style.display='none'">
+                    <img id="AureliaAvatar" src="/static/aurelia_pixel.png" alt="Aurelia Pixel">
                 </div>
             </div>
-
             <div class="panel-col">
                 <div class="panel-box" id="ThermalsBox">
-                    <div class="somatic-bar">
-                        <span class="bar-label">CPU</span>
-                        <div class="bar-fill-container"><div class="bar-fill" id="bar-cpu"></div></div>
-                        <span id="text-cpu" style="margin-left: 6px; min-width: 35px; text-align: right;">--°C</span>
-                    </div>
-                    <div class="somatic-bar">
-                        <span class="bar-label">iGPU</span>
-                        <div class="bar-fill-container"><div class="bar-fill" id="bar-igpu"></div></div>
-                        <span id="text-igpu" style="margin-left: 6px; min-width: 35px; text-align: right;">--°C</span>
-                    </div>
-                    <div class="somatic-bar">
-                        <span class="bar-label">eGPU</span>
-                        <div class="bar-fill-container"><div class="bar-fill" id="bar-egpu"></div></div>
-                        <span id="text-egpu" style="margin-left: 6px; min-width: 35px; text-align: right;">--°C</span>
-                    </div>
+                    <div class="somatic-bar"><span class="bar-label">CPU</span><div class="bar-fill-container"><div class="bar-fill" id="bar-cpu"></div></div><span id="text-cpu" style="margin-left:4px; min-width:30px;">--°C</span></div>
+                    <div class="somatic-bar"><span class="bar-label">iGPU</span><div class="bar-fill-container"><div class="bar-fill" id="bar-igpu"></div></div><span id="text-igpu" style="margin-left:4px; min-width:30px;">--°C</span></div>
+                    <div class="somatic-bar"><span class="bar-label">eGPU</span><div class="bar-fill-container"><div class="bar-fill" id="bar-egpu"></div></div><span id="text-egpu" style="margin-left:4px; min-width:30px;">--°C</span></div>
                 </div>
-
                 <div class="panel-box" id="TerminalBox">
-                    > [SYSTEM] 13B Subconscious Terminal Booted...<br>
+                    > Subconscious Terminal Active...<br>
                 </div>
             </div>
+        </div>
+
+        <div id="CameraContainer">
+            <div class="cam-overlay">
+                <span id="CamLabel">EYE_FEED: CONNECTING...</span>
+            </div>
+            <video id="LivePreview" autoplay playsinline></video>
+            <canvas id="SnapCanvas" style="display:none;"></canvas>
         </div>
 
         <div id="ChatContainer">
@@ -294,42 +250,87 @@
         </div>
 
         <div id="InputArea">
-            <button class="eye-btn" onclick="document.getElementById('MobileEyeInput').click()">[+]</button>
-            <button class="eye-btn" style="color: #FF8F00;" onclick="promptSetGoal()">[🦊]</button>
-            <input type="file" id="MobileEyeInput" accept="image/*" capture="environment">
-            <div id="InputWrapper">
-                <span class="prompt-arrow">></span>
-                <input type="text" id="ChatInput" autocomplete="off">
+            <div class="input-row">
+                <div id="InputWrapper">
+                    <span class="prompt-arrow">></span>
+                    <input type="text" id="ChatInput" autocomplete="off">
+                </div>
+                <button class="send-btn" onclick="sendChatMessage()">></button>
             </div>
-            <button class="send-btn" onclick="sendChatMessage()">></button>
+            
+            <div class="icon-row">
+                <button class="vitals-btn" id="BleBtn" onclick="toggleWebBluetooth()">[♥]</button>
+                <button class="eye-btn" id="CamBtn" onclick="handleEyeToggle()">[👁]</button>
+                
+                <button class="eye-btn" id="CamCloseBtn" style="display:none; color:#ff3333;" onclick="closeCamera()">[&lt;-]</button>
+                
+                <button class="eye-btn" id="SnapBtn" style="display:none; color:var(--term-green);" onclick="takeOpticSnap()">[SNAP]</button>
+                
+                <button class="eye-btn" id="FolderBtn" style="color:#2196F3;" onclick="triggerFileUpload()">[📁]</button>
+                
+                <button class="eye-btn" style="color: #FF8F00;" onclick="promptSetGoal()">[🦊]</button>
+            </div>
         </div>
     </div>
 
     <div id="LibraryView" class="view-container">
-        <div id="LibraryList">
-            <div style="color:#777; text-align:center; margin-top:20px;">Fetching Archives...</div>
-        </div>
+        <div id="LibraryList"><div style="color:#777; text-align:center; margin-top:20px;">Fetching Archives...</div></div>
     </div>
 
-    <div id="ReportCanvas">
-        <div id="ReportHeader">
-            <span id="ReportTitle">DOCUMENT_VIEWER</span>
-            <button id="CloseReportBtn" onclick="closeReport()">X CLOSE</button>
+    <div id="PreviewModal">
+        <img id="PreviewImage" src="">
+        <input type="text" id="PreviewCaption" placeholder="Add context or a caption (optional)...">
+        <div class="preview-btn-row">
+            <button class="preview-btn btn-retake" onclick="retakePhoto()">RETAKE</button>
+            <button class="preview-btn btn-send" onclick="sendPhoto()">SEND TO AURELIA</button>
         </div>
-        <div id="ReportContent"></div>
     </div>
 
     <script>
+        // ----------------------------------------------------
+        // SESSION STORAGE LOGIC (Survives Minimize)
+        // ----------------------------------------------------
+        function saveChatHistory() {
+            const chatContainer = document.getElementById('ChatContainer');
+            if (chatContainer) {
+                sessionStorage.setItem('aurelia_mobile_history', chatContainer.innerHTML);
+            }
+        }
+
+        function restoreChatHistory() {
+            const chatContainer = document.getElementById('ChatContainer');
+            const savedHistory = sessionStorage.getItem('aurelia_mobile_history');
+            if (chatContainer && savedHistory) {
+                chatContainer.innerHTML = savedHistory;
+                chatContainer.scrollTop = chatContainer.scrollHeight;
+            }
+        }
+
+        document.addEventListener('DOMContentLoaded', () => {
+            restoreChatHistory();
+        });
+
+        // --- PWA CAMERA THAW PROTOCOL ---
+        document.addEventListener("visibilitychange", () => {
+            if (document.visibilityState === "visible" && isCamActive) {
+                console.log("PWA Woke Up. Thawing camera stream...");
+                if(videoDevices.length > 0) {
+                    startCamera(videoDevices[currentCamIndex].deviceId).catch(e => {
+                        appendChat('msg-aurelia', '[ERROR] Failed to wake optic sensor.');
+                    });
+                }
+            }
+        });
+
+        // ----------------------------------------------------
+        // VIEW SWITCHING
+        // ----------------------------------------------------
         function switchView(viewId) {
             document.querySelectorAll('.view-container').forEach(el => el.classList.remove('active'));
             document.querySelectorAll('.nav-btn').forEach(el => el.classList.remove('active'));
-            
             document.getElementById(viewId).classList.add('active');
             event.currentTarget.classList.add('active');
-
-            if (viewId === 'LibraryView') {
-                fetchLibrary();
-            }
+            if (viewId === 'LibraryView') fetchLibrary();
         }
 
         const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -337,63 +338,239 @@
         let portalWS = null;
         let systemWS = null;
 
-        // --- FIXED: DECOUPLED WEBSOCKET RECONNECTIONS ---
-        // This prevents the PWA from accidentally stacking multiple zombie connections 
-        // when the phone screen turns off and suspends the browser.
-        function connectPortalWS() {
-            if (portalWS) {
-                portalWS.onclose = null; 
-                portalWS.close();
+        let currentStream = null;
+        let videoDevices = [];
+        let currentCamIndex = 0;
+        let isCamActive = false;
+        
+        let currentSnapBlob = null; // Holds the image temporarily before sending
+
+        // ----------------------------------------------------
+        // CAMERA LOGIC (CYCLE / OPEN)
+        // ----------------------------------------------------
+        async function handleEyeToggle() {
+            const container = document.getElementById('CameraContainer');
+            const snapBtn = document.getElementById('SnapBtn');
+            const camBtn = document.getElementById('CamBtn');
+            const closeBtn = document.getElementById('CamCloseBtn');
+
+            if (!isCamActive) {
+                try {
+                    const initialStream = await navigator.mediaDevices.getUserMedia({ video: true });
+                    initialStream.getTracks().forEach(t => t.stop());
+
+                    const devices = await navigator.mediaDevices.enumerateDevices();
+                    videoDevices = devices.filter(d => d.kind === 'videoinput');
+                    
+                    if (videoDevices.length === 0) {
+                        appendChat('msg-aurelia', '[ERROR] No optic sensors found.');
+                        return;
+                    }
+
+                    await startCamera(videoDevices[currentCamIndex].deviceId);
+                    container.style.display = 'block';
+                    snapBtn.style.display = 'block';
+                    closeBtn.style.display = 'block';
+                    camBtn.style.color = 'var(--term-green)';
+                    isCamActive = true;
+                    updateCamLabel();
+                } catch (err) {
+                    appendChat('msg-aurelia', `[ERROR] Optic Denied: ${err.name}`);
+                }
+            } else {
+                if (videoDevices.length < 2) return;
+                currentCamIndex = (currentCamIndex + 1) % videoDevices.length;
+                try {
+                    await startCamera(videoDevices[currentCamIndex].deviceId);
+                    updateCamLabel();
+                } catch (e) {
+                    console.error("Cycle failed", e);
+                    handleEyeToggle(); 
+                }
+            }
+        }
+
+        function closeCamera() {
+            stopCamera();
+            document.getElementById('CameraContainer').style.display = 'none';
+            document.getElementById('SnapBtn').style.display = 'none';
+            document.getElementById('CamCloseBtn').style.display = 'none';
+            document.getElementById('CamBtn').style.color = 'var(--text-dim)';
+            isCamActive = false;
+        }
+
+        async function startCamera(deviceId) {
+            if (currentStream) currentStream.getTracks().forEach(t => t.stop());
+            const constraints = { video: { deviceId: { exact: deviceId } } };
+            currentStream = await navigator.mediaDevices.getUserMedia(constraints);
+            document.getElementById('LivePreview').srcObject = currentStream;
+        }
+
+        function stopCamera() {
+            if (currentStream) {
+                currentStream.getTracks().forEach(track => track.stop());
+                currentStream = null;
+            }
+        }
+
+        function updateCamLabel() {
+            const label = document.getElementById('CamLabel');
+            label.innerText = `EYE_FEED: LENS ${currentCamIndex + 1}/${videoDevices.length}`;
+        }
+
+        // ----------------------------------------------------
+        // PHOTO CAPTURE & PREVIEW MODAL
+        // ----------------------------------------------------
+        async function takeOpticSnap() {
+            const video = document.getElementById('LivePreview');
+            const canvas = document.getElementById('SnapCanvas');
+            const context = canvas.getContext('2d');
+            
+            if (video.videoWidth === 0) return;
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+            context.drawImage(video, 0, 0, canvas.width, canvas.height);
+            
+            // Generate Data URL for instant preview
+            const dataUrl = canvas.toDataURL('image/jpeg', 0.80);
+            document.getElementById('PreviewImage').src = dataUrl;
+            
+            // Store blob in memory for sending later
+            canvas.toBlob((blob) => {
+                currentSnapBlob = blob;
+            }, 'image/jpeg', 0.80);
+
+            // Pop open the modal
+            document.getElementById('PreviewModal').style.display = 'flex';
+        }
+
+        function retakePhoto() {
+            document.getElementById('PreviewModal').style.display = 'none';
+            document.getElementById('PreviewImage').src = '';
+            document.getElementById('PreviewCaption').value = '';
+            currentSnapBlob = null;
+        }
+
+        async function sendPhoto() {
+            if (!currentSnapBlob) return;
+            
+            const captionInput = document.getElementById('PreviewCaption');
+            const captionText = captionInput.value.trim();
+
+            document.getElementById('PreviewModal').style.display = 'none';
+            appendChat('msg-geiger', '[SYSTEM] Vision Transmission Initiated...');
+            
+            const formData = new FormData();
+            formData.append('file', currentSnapBlob, 'mobile_snap.jpg');
+            
+            try {
+                // Send Image
+                const response = await fetch('/upload_image', { method: 'POST', body: formData });
+                if (!response.ok) throw new Error("Server rejected frame.");
+                
+                // If there's a caption, send it over WebSocket right behind the image
+                if (captionText && portalWS?.readyState === WebSocket.OPEN) {
+                    portalWS.send(JSON.stringify({ type: "chat", text: `[Image Context]: ${captionText}` }));
+                    appendChat('msg-geiger', `Geiger: [Image Context]: ${captionText}`);
+                }
+            } catch (err) {
+                appendChat('msg-aurelia', '[ERROR] Transmission Failed.');
             }
             
-            portalWS = new WebSocket(`${wsHost}/ws/portal`);
+            // Clean up the modal state
+            captionInput.value = '';
+            currentSnapBlob = null;
+            document.getElementById('PreviewImage').src = '';
+        }
+
+        // ----------------------------------------------------
+        // FILE UPLOAD (Intercepts Gallery uploads to the Preview Modal)
+        // ----------------------------------------------------
+        function triggerFileUpload() {
+            document.getElementById('FileUploadInput').click();
+        }
+
+        function handleFileUpload(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                document.getElementById('PreviewImage').src = e.target.result;
+                currentSnapBlob = file; 
+                document.getElementById('PreviewModal').style.display = 'flex';
+            };
+            reader.readAsDataURL(file);
             
+            // Reset input so the same file can be selected again
+            event.target.value = '';
+        }
+
+        // ----------------------------------------------------
+        // BLUETOOTH & ROBUST SOCKETS
+        // ----------------------------------------------------
+        let bleDevice = null;
+        async function toggleWebBluetooth() {
+            const btn = document.getElementById('BleBtn');
+            if (bleDevice && bleDevice.gatt.connected) {
+                bleDevice.gatt.disconnect();
+                btn.classList.remove('active');
+                return;
+            }
+            try {
+                bleDevice = await navigator.bluetooth.requestDevice({ filters: [{ services: ['heart_rate'] }] });
+                const server = await bleDevice.gatt.connect();
+                const service = await server.getPrimaryService('heart_rate');
+                const char = await service.getCharacteristic('heart_rate_measurement');
+                await char.startNotifications();
+                char.addEventListener('characteristicvaluechanged', (e) => {
+                    const val = e.target.value;
+                    const bpm = val.getUint8(1);
+                    if (portalWS?.readyState === WebSocket.OPEN) portalWS.send(JSON.stringify({ type: "mobile_bpm", bpm }));
+                });
+                btn.classList.add('active');
+                appendChat('msg-aurelia', '[SYSTEM] Vitals Linked.');
+            } catch (error) {
+                appendChat('msg-aurelia', `[ERROR] BLE: ${error.message}`);
+            }
+        }
+
+        // --- PWA SUSPENSION RECONNECT PATCH ---
+        function connectPortalWS() {
+            portalWS = new WebSocket(`${wsHost}/ws/portal`);
             portalWS.onmessage = (event) => {
                 const data = JSON.parse(event.data);
                 if (data.type === "audio") {
                     const player = document.getElementById('VoicePlayer');
-                    player.src = data.url + "?t=" + new Date().getTime();
-                    player.play().catch(e => console.log("Tap required to play audio."));
-                } 
-                else if (data.type === "chat") {
+                    player.src = data.url + "?t=" + Date.now();
+                    player.play();
+                } else if (data.type === "chat") {
                     appendChat('msg-aurelia', `Aurelia: ${data.text}`);
-                    if (data.text.includes("<REPORT>")) {
-                        showNotification("Aurelia handed you a document. Check Library.");
-                    }
-                }
-                else if (data.type === "notification") {
-                    appendChat('msg-aurelia', `[SYSTEM] ${data.message}`);
+                } else if (data.type === "image") {
+                    appendImage(data.data);
                 }
             };
-            
-            portalWS.onclose = () => setTimeout(connectPortalWS, 5000);
+            portalWS.onclose = () => {
+                setTimeout(connectPortalWS, 3000);
+            };
         }
 
         function connectSystemWS() {
-            if (systemWS) {
-                systemWS.onclose = null;
-                systemWS.close();
-            }
-            
             systemWS = new WebSocket(`${wsHost}/ws/system`);
-            
-            systemWS.onmessage = (event) => {
-                const payload = JSON.parse(event.data);
-                if (payload.type === "somatic_data") {
-                    updateSomaticHUD(payload.data);
-                } else if (payload.type === "terminal_log") {
-                    appendTerminal(payload.text);
-                }
+            systemWS.onmessage = (e) => {
+                const payload = JSON.parse(e.data);
+                if (payload.type === "somatic_data") updateSomaticHUD(payload.data);
+                else if (payload.type === "terminal_log") appendTerminal(payload.text);
             };
-            
-            systemWS.onclose = () => setTimeout(connectSystemWS, 5000);
+            systemWS.onclose = () => {
+                setTimeout(connectSystemWS, 3000);
+            };
         }
 
         function connectWebSockets() {
             connectPortalWS();
             connectSystemWS();
         }
-        // -------------------------------------------------
 
         function appendChat(className, text) {
             const box = document.getElementById('ChatContainer');
@@ -402,131 +579,57 @@
             msg.textContent = text;
             box.appendChild(msg);
             box.scrollTop = box.scrollHeight;
+            saveChatHistory(); 
         }
 
-        function appendTerminal(text) {
-            const term = document.getElementById('TerminalBox');
-            term.innerHTML += `> ${text}<br>`;
-            term.scrollTop = term.scrollHeight;
+        function appendImage(src) {
+            const box = document.getElementById('ChatContainer');
+            const img = document.createElement('img');
+            img.src = src;
+            img.className = 'chat-image';
+            box.appendChild(img);
+            img.onload = () => {
+                box.scrollTop = box.scrollHeight;
+                saveChatHistory();
+            };
         }
 
         function updateSomaticHUD(data) {
             const clamp = (val, max) => Math.min(100, Math.max(0, (val / max) * 100));
-            
-            const cpu = data.cpu_thermals || 0;
-            const igpu = data.brain_thermals_strix || 0;
-            const egpu = data.eye_thermals_v620 || 0;
+            document.getElementById('bar-cpu').style.width = clamp(data.cpu_thermals || 0, 90) + '%';
+            document.getElementById('bar-igpu').style.width = clamp(data.brain_thermals_strix || 0, 90) + '%';
+            document.getElementById('bar-egpu').style.width = clamp(data.eye_thermals_v620 || 0, 90) + '%';
+            document.getElementById('text-cpu').innerText = (data.cpu_thermals || 0).toFixed(1) + '°C';
+            document.getElementById('text-igpu').innerText = (data.brain_thermals_strix || 0).toFixed(1) + '°C';
+            document.getElementById('text-egpu').innerText = (data.eye_thermals_v620 || 0).toFixed(1) + '°C';
+        }
 
-            document.getElementById('bar-cpu').style.width = clamp(cpu, 90) + '%';
-            document.getElementById('bar-igpu').style.width = clamp(igpu, 90) + '%';
-            document.getElementById('bar-egpu').style.width = clamp(egpu, 90) + '%';
-
-            document.getElementById('text-cpu').innerText = cpu.toFixed(1) + '°C';
-            document.getElementById('text-igpu').innerText = igpu.toFixed(1) + '°C';
-            document.getElementById('text-egpu').innerText = egpu.toFixed(1) + '°C';
+        function appendTerminal(text) {
+            const term = document.getElementById('TerminalBox');
+            const cleanText = text.substring(0, 500); 
+            term.innerHTML += `> ${cleanText}<br>`;
+            term.scrollTop = term.scrollHeight;
         }
 
         function sendChatMessage() {
             const input = document.getElementById('ChatInput');
-            const text = input.value.trim();
-            if (text && portalWS && portalWS.readyState === WebSocket.OPEN) {
-                portalWS.send(JSON.stringify({ type: "chat", text: text }));
-                appendChat('msg-geiger', `Geiger (User): ${text}`);
+            if (input.value.trim() && portalWS?.readyState === WebSocket.OPEN) {
+                portalWS.send(JSON.stringify({ type: "chat", text: input.value.trim() }));
+                appendChat('msg-geiger', `Geiger: ${input.value}`);
                 input.value = '';
-                
-                setTimeout(() => {
-                    const box = document.getElementById('ChatContainer');
-                    box.scrollTop = box.scrollHeight;
-                }, 100);
             }
         }
-        
+
         function promptSetGoal() {
-            const goal = prompt("Define a new internal goal for Aurelia's Subconscious Lobe:");
-            if (goal && goal.trim() !== '') {
-                if (portalWS && portalWS.readyState === WebSocket.OPEN) {
-                    portalWS.send(JSON.stringify({ type: "set_goal", text: goal.trim() }));
-                    appendChat('msg-geiger', `Geiger (User): [Goal Injected] ${goal.trim()}`);
-                }
+            const goal = prompt("Subconscious Lobe Directive:");
+            if (goal && portalWS?.readyState === WebSocket.OPEN) {
+                portalWS.send(JSON.stringify({ type: "set_goal", text: goal.trim() }));
+                appendChat('msg-geiger', `[Goal Injected] ${goal}`);
             }
         }
 
-        document.getElementById('ChatInput').addEventListener('keypress', function(e) {
-            if (e.key === 'Enter') sendChatMessage();
-        });
-
-        document.getElementById('MobileEyeInput').addEventListener('change', async function() {
-            if (this.files && this.files[0]) {
-                appendChat('msg-geiger', 'Geiger (User): [Uploading Optic Feed...]');
-                const formData = new FormData();
-                formData.append('file', this.files[0]);
-                try {
-                    await fetch('/upload_image', { method: 'POST', body: formData });
-                } catch (err) {
-                    appendChat('msg-aurelia', '[ERROR] Optic Feed Failed.');
-                }
-            }
-        });
-
-        async function fetchLibrary() {
-            try {
-                const res = await fetch('/api/library');
-                const data = await res.json();
-                const list = document.getElementById('LibraryList');
-                list.innerHTML = '';
-                
-                if (!data.reports || data.reports.length === 0) {
-                    list.innerHTML = '<div style="color:#777; text-align:center;">Archive is empty.</div>';
-                    return;
-                }
-
-                data.reports.forEach(report => {
-                    const div = document.createElement('div');
-                    div.className = 'library-item';
-                    div.innerHTML = `<h3>${report.title}</h3><p>${new Date(report.created_at * 1000).toLocaleString()}</p>`;
-                    div.onclick = () => openReport(report.filename, report.title);
-                    list.appendChild(div);
-                });
-            } catch (err) {
-                console.error("Failed to fetch library", err);
-            }
-        }
-
-        async function openReport(filename, title) {
-            try {
-                const res = await fetch(`/library_files/${filename}`);
-                const content = await res.text();
-                document.getElementById('ReportTitle').textContent = title;
-                if(filename.endsWith('.html')) {
-                     document.getElementById('ReportContent').innerHTML = content;
-                } else {
-                     document.getElementById('ReportContent').textContent = content;
-                }
-                document.getElementById('ReportCanvas').classList.add('open');
-            } catch(err) {
-                alert("Failed to load document.");
-            }
-        }
-
-        function closeReport() {
-            document.getElementById('ReportCanvas').classList.remove('open');
-        }
-
-        function showNotification(msg) {
-            const notif = document.createElement('div');
-            notif.style.cssText = "position:absolute; top:60px; left:50%; transform:translateX(-50%); background:var(--term-green); color:#000; padding:10px; font-weight:bold; border-radius:4px; z-index:999; text-align:center; width:80%; font-size:12px;";
-            notif.textContent = msg;
-            document.body.appendChild(notif);
-            setTimeout(() => notif.remove(), 4000);
-        }
-
+        document.getElementById('ChatInput').addEventListener('keypress', (e) => { if (e.key === 'Enter') sendChatMessage(); });
         connectWebSockets();
-
-        if ('serviceWorker' in navigator) {
-            navigator.serviceWorker.register('/sw.js').then(() => {
-                console.log("[SYSTEM] Neural Service Worker Active.");
-            });
-        }
     </script>
 </body>
 </html>
